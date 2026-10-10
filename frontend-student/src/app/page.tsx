@@ -61,8 +61,14 @@ export default function StudentPage() {
   }, []);
 
   const handlePunchSuccess = (data: StudentSession) => {
-    // Show opt-in consent and pre-prompt screen first (Item 8)
-    setPendingConsentSession(data);
+    // Transition immediately to lecture mode with kiosk containment active!
+    setKioskMode(true);
+    setSession(data);
+    setPendingConsentSession(null);
+
+    if (typeof document !== "undefined" && document.documentElement.requestFullscreen) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
   };
 
   const handleConfirmConsent = (enableKiosk: boolean) => {

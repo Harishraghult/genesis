@@ -29,6 +29,34 @@ const BLUR_GRACE_MS = 1500; // ignore momentary blurs (e.g. notification shade p
  * What a web app CANNOT do: physically stop the OS from opening other apps/tabs.
  * That requires the Android companion (screen pinning via startLockTask + VpnService).
  */
+function playAlertBeep() {
+  try {
+    if (typeof window === "undefined") return;
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.35);
+    gain.gain.setValueAtTime(0.5, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.35);
+  } catch {}
+}
+
+function triggerVibrate(pattern: number[] = [300, 150, 300, 150, 500]) {
+  try {
+    if (typeof navigator !== "undefined" && navigator.vibrate) {
+      navigator.vibrate(pattern);
+    }
+  } catch {}
+}
+
 export default function FocusAttestation({
   studentId,
   kiosk = true,
@@ -75,7 +103,7 @@ export default function FocusAttestation({
 
   const enterFullscreen = useCallback(() => {
     const el: any = document.documentElement;
-    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
     if (req && !document.fullscreenElement) {
       try {
         const p = req.call(el, { navigationUI: "hide" });
@@ -91,6 +119,9 @@ export default function FocusAttestation({
       setIsFocused(false);
       setLeaveCount((n) => n + 1);
       onFocusStatusChange?.(false);
+      playAlertBeep();
+      triggerVibrate();
+      setShowReturnOverlay(true);
       report("EVENT_FOCUS_LOST", detail);
     },
     [onFocusStatusChange, report]
@@ -101,6 +132,8 @@ export default function FocusAttestation({
     lostRef.current = false;
     setIsFocused(true);
     onFocusStatusChange?.(true);
+    playAlertBeep();
+    triggerVibrate([200, 100, 200]);
     report("EVENT_FOCUS_RESTORED", "Returned to lecture");
     if (kiosk) setShowReturnOverlay(true);
     requestWakeLock();
@@ -116,26 +149,30 @@ export default function FocusAttestation({
       if (msg.type === "HELLO") {
         // Another FocusLock tab just opened: tell it we own the session
         ch.postMessage({ type: "OWNED", from: tabId.current, student: studentId });
+        markLost("Attempted to open parallel FocusLock tab");
       } else if (msg.type === "OWNED") {
         setDuplicateTab(true);
       }
     };
     ch.postMessage({ type: "HELLO", from: tabId.current });
     return () => ch.close();
-  }, [active, studentId]);
+  }, [active, studentId, markLost]);
 
   // 2. Leave detection: visibility (tab/app switch, home, lock) + blur (split screen, floating apps)
   useEffect(() => {
     if (!active) return;
 
     const onVisibility = () => {
-      if (document.visibilityState === "hidden") markLost("Switched tab or app");
-      else markRestored();
+      if (document.visibilityState === "hidden") {
+        markLost("Switched tab or minimized browser");
+      } else {
+        markRestored();
+      }
     };
     const onBlur = () => {
       if (blurTimer.current) clearTimeout(blurTimer.current);
       blurTimer.current = setTimeout(() => {
-        if (!document.hasFocus()) markLost("Lecture window lost focus (split-screen / overlay)");
+        if (!document.hasFocus()) markLost("Lecture window lost focus (split-screen / tab change)");
       }, BLUR_GRACE_MS);
     };
     const onFocus = () => {
@@ -166,24 +203,28 @@ export default function FocusAttestation({
 
     const onFs = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener("fullscreenchange", onFs);
+    document.addEventListener("webkitfullscreenchange", onFs);
     onFs();
 
     // Trap Android back gesture/button inside the lecture
     history.pushState({ focuslock: true }, "");
     const onPop = () => {
       history.pushState({ focuslock: true }, "");
+      playAlertBeep();
+      triggerVibrate();
       setShowReturnOverlay(true);
     };
     window.addEventListener("popstate", onPop);
 
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault();
-      e.returnValue = "";
+      e.returnValue = "FocusLock lecture is active. Leaving records an attendance violation.";
     };
     window.addEventListener("beforeunload", onBeforeUnload);
 
     return () => {
       document.removeEventListener("fullscreenchange", onFs);
+      document.removeEventListener("webkitfullscreenchange", onFs);
       window.removeEventListener("popstate", onPop);
       window.removeEventListener("beforeunload", onBeforeUnload);
     };
@@ -198,13 +239,15 @@ export default function FocusAttestation({
   // Duplicate tab: block this copy entirely
   if (duplicateTab) {
     return (
-      <div className="fixed inset-0 z-[100] bg-slate-950 flex items-center justify-center p-6">
-        <div className="max-w-sm text-center bg-slate-900 border border-rose-800 rounded-2xl p-6 shadow-2xl">
-          <Copy className="w-10 h-10 text-rose-400 mx-auto mb-3" />
-          <h2 className="text-lg font-bold text-white">FocusLock is already open</h2>
-          <p className="text-xs text-slate-400 mt-2">
-            Your lecture session is running in another tab or window. Only one FocusLock window is allowed per session.
-            Close this tab and return to the original.
+      <div className="fixed inset-0 z-[100] bg-slate-950 flex items-center justify-center p-6 text-center">
+        <div className="max-w-sm bg-rose-950/90 border border-rose-600 rounded-2xl p-6 shadow-2xl">
+          <Copy className="w-12 h-12 text-rose-400 mx-auto mb-3 animate-pulse" />
+          <h2 className="text-lg font-bold text-white">Parallel Tabs Restricted</h2>
+          <p className="text-xs text-rose-200 mt-2">
+            FocusLock is actively locked to your primary lecture tab. Parallel tabs and multi-tab browsing are strictly restricted.
+          </p>
+          <p className="text-[11px] text-slate-400 mt-3 font-mono">
+            Close this tab and return to your active lecture session.
           </p>
         </div>
       </div>
@@ -215,22 +258,36 @@ export default function FocusAttestation({
 
   return (
     <>
+      {/* Sticky Fullscreen Enforcer Banner for Mobile Tabs */}
+      {kiosk && !isFullscreen && (
+        <button
+          onClick={enterFullscreen}
+          className="w-full mb-3 p-3 bg-gradient-to-r from-amber-600 to-rose-600 text-white rounded-xl text-xs font-bold flex items-center justify-between shadow-lg shadow-rose-950/50 animate-pulse border border-amber-400"
+        >
+          <div className="flex items-center gap-2">
+            <Maximize className="w-4 h-4 shrink-0" />
+            <span>🔒 TAB LOCK INACTIVE: Tap to Lock Fullscreen & Hide Tabs</span>
+          </div>
+          <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded uppercase tracking-wider">Lock Now</span>
+        </button>
+      )}
+
       <div
         className={`px-4 py-2.5 rounded-xl border flex items-center justify-between transition-colors shadow-lg ${
           isFocused
             ? "bg-slate-900/90 border-emerald-500/30 text-emerald-300"
-            : "bg-amber-950/90 border-amber-500 text-amber-200 animate-pulse"
+            : "bg-rose-950/90 border-rose-500 text-rose-200 animate-pulse"
         }`}
       >
         <div className="flex items-center gap-2.5">
           {isFocused ? (
             <ShieldCheck className="w-5 h-5 text-emerald-400" />
           ) : (
-            <AlertTriangle className="w-5 h-5 text-amber-400" />
+            <AlertTriangle className="w-5 h-5 text-rose-400" />
           )}
           <div>
             <span className="text-xs font-bold uppercase tracking-wider block">
-              {isFocused ? (kiosk ? "Lecture Kiosk Active" : "Presence Active") : "You left the lecture"}
+              {isFocused ? (isFullscreen ? "🔒 Kiosk Mode Locked" : "Lecture Presence Active") : "⚠️ Tab / Focus Violation Detected"}
             </span>
             <span className="text-[11px] text-slate-400 font-mono">
               Left {leaveCount}× · Screen {wakeLockActive ? "kept awake" : "may sleep"}
@@ -248,20 +305,27 @@ export default function FocusAttestation({
       </div>
 
       {showReturnOverlay && (
-        <div className="fixed inset-0 z-[90] bg-slate-950/95 backdrop-blur flex items-center justify-center p-6">
-          <div className="max-w-sm w-full text-center bg-slate-900 border border-amber-700 rounded-2xl p-6 shadow-2xl">
-            <AlertTriangle className="w-10 h-10 text-amber-400 mx-auto mb-3" />
-            <h2 className="text-lg font-bold text-white">You left the lecture</h2>
-            <p className="text-xs text-slate-400 mt-2">
-              Switching apps or tabs is recorded in the class-wide focus index ({leaveCount}× this session). It is never
-              shown by name on the projector and never affects grades automatically.
+        <div className="fixed inset-0 z-[90] bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-6 animate-fade-in">
+          <div className="max-w-sm w-full text-center bg-slate-900 border-2 border-rose-600 rounded-2xl p-6 shadow-2xl">
+            <div className="w-14 h-14 bg-rose-500/10 border border-rose-500/30 rounded-full flex items-center justify-center mx-auto mb-3 text-rose-400 animate-bounce">
+              <AlertTriangle className="w-8 h-8" />
+            </div>
+            <h2 className="text-lg font-extrabold text-white">Focus Violation Detected</h2>
+            <p className="text-xs text-rose-200/90 mt-2">
+              You switched away from FocusLock or switched tabs. Tab switching is restricted during lecture containment.
+            </p>
+            <div className="my-3 p-2 bg-slate-950 border border-rose-900/60 rounded-lg text-xs font-mono text-rose-300">
+              Violations recorded: {leaveCount}× this session
+            </div>
+            <p className="text-[11px] text-slate-400 italic">
+              Attendance verification requires maintaining foreground presence in lecture materials.
             </p>
             <button
               id="resume-lecture-btn"
               onClick={handleResume}
-              className="mt-5 w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-sm font-bold"
+              className="mt-5 w-full py-3.5 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 text-xs font-bold uppercase tracking-wider shadow-lg shadow-emerald-500/20 active:scale-[0.98] transition-transform"
             >
-              Return to Lecture
+              Re-Engage Lecture Lock (Fullscreen)
             </button>
           </div>
         </div>
