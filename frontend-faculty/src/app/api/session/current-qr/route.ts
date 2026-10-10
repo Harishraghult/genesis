@@ -6,11 +6,6 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   syncFromDisk();
 
-  // If session has not been explicitly stopped, keep it active
-  if (!SESSION_STATE.is_active && SESSION_STATE.ended_at === 0) {
-    SESSION_STATE.is_active = true;
-  }
-
   if (!SESSION_STATE.is_active) {
     return NextResponse.json({
       is_active: false,

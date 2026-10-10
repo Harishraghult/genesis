@@ -22,6 +22,8 @@ import {
   PieChart,
   ShieldCheck,
   AlertCircle,
+  Loader2,
+  Play,
 } from "lucide-react";
 
 interface AggregateMetrics {
@@ -410,20 +412,27 @@ export default function FacultyDashboard() {
               </button>
             )}
 
-            {/* Stop / End Session Button */}
-            <button
-              id="stop-session-btn"
-              onClick={handleEndSession}
-              disabled={!sessionActive}
-              className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all flex items-center justify-center gap-2 ${
-                sessionActive
-                  ? "bg-rose-950/80 hover:bg-rose-900 border-rose-700 text-rose-200 hover:text-white shadow-lg shadow-rose-950/50 cursor-pointer active:scale-95"
-                  : "bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed"
-              }`}
-            >
-              <Power className={`w-4 h-4 ${sessionActive ? "text-rose-400" : "text-slate-600"}`} />
-              {sessionActive ? "Stop Session & Release Locks" : "Session Stopped / Idle"}
-            </button>
+            {/* Session Controls: Start or Stop Button */}
+            {!sessionActive ? (
+              <button
+                id="start-session-controls-btn"
+                onClick={handleStartSession}
+                disabled={starting}
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 active:scale-95 cursor-pointer disabled:opacity-60"
+              >
+                {starting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                {starting ? "Starting..." : "Start Session & Show QR"}
+              </button>
+            ) : (
+              <button
+                id="stop-session-btn"
+                onClick={handleEndSession}
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider bg-rose-950/80 hover:bg-rose-900 border border-rose-700 text-rose-200 hover:text-white shadow-lg shadow-rose-950/50 cursor-pointer active:scale-95 transition-all flex items-center justify-center gap-2"
+              >
+                <Power className="w-4 h-4 text-rose-400" />
+                Stop Session &amp; Release Locks
+              </button>
+            )}
           </div>
         </div>
 

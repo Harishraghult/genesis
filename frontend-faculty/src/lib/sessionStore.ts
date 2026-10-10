@@ -44,9 +44,9 @@ import os from "os";
 const STATE_FILE = path.join(os.tmpdir(), "focuslock_session_state.json");
 
 export const SESSION_STATE = globalForSession.fl_session ?? {
-  is_active: true,
+  is_active: false,
   session_id: "FL-CS402-2026",
-  started_at: Math.floor(Date.now() / 1000),
+  started_at: 0,
   ended_at: 0,
   course_name: "CS-402: Advanced Distributed Systems & Cyber-Physical Security",
   instructor: "Dr. Sarah Jenkins",
