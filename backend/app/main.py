@@ -132,6 +132,20 @@ seed_students()
 
 # --- ROUTES ---
 
+@app.get("/")
+def root():
+    return {
+        "service": "FocusLock Core API Gateway",
+        "status": "online",
+        "active_session": ACTIVE_SESSION["session_id"],
+        "endpoints": {
+            "health": "/api/health",
+            "status": "/api/session/status",
+            "current_qr": "/api/session/current-qr",
+            "docs": "/docs"
+        }
+    }
+
 @app.get("/api/health")
 def health():
     return {
