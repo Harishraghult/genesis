@@ -3,9 +3,13 @@ export function getApiBase(): string {
     return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, "");
   }
   if (typeof window !== "undefined") {
+    // On Vercel or any HTTPS origin, use same-origin Next.js API routes directly
+    if (window.location.hostname.endsWith(".vercel.app") || window.location.protocol === "https:") {
+      return "";
+    }
     return `${window.location.protocol}//${window.location.hostname}:8000`;
   }
-  return "http://localhost:8000";
+  return "";
 }
 
 export function getWsUrl(): string {

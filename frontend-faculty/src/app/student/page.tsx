@@ -24,41 +24,70 @@ export default function StudentPage() {
   const [pulseQuiz, setPulseQuiz] = useState<any | null>(null);
   const [sessionEnded, setSessionEnded] = useState<boolean>(false);
   const [kioskMode, setKioskMode] = useState<boolean>(true);
+  const [emergencyNumber, setEmergencyNumber] = useState<string>("112");
+
+  // Immediate termination handler
+  const triggerSessionTermination = () => {
+    setSessionEnded(true);
+    if (typeof document !== "undefined" && document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+    setTimeout(() => {
+      setSession(null);
+      setPendingConsentSession(null);
+      setSessionEnded(false);
+    }, 1200);
+  };
 
   useEffect(() => {
+    // 1. WebSocket notification
     const unsubscribe = studentWsClient.subscribe((msg: any) => {
-      // console.log("[Student WS Event]:", msg);
-
       if (msg.type === "PRESENCE_PULSE_START") {
         setPulseQuiz(msg.quiz);
       } else if (msg.type === "SESSION_ENDED") {
-        setSessionEnded(true);
-        if (typeof document !== "undefined" && document.fullscreenElement) {
-          document.exitFullscreen().catch(() => {});
-        }
-        setTimeout(() => {
-          setSession(null);
-          setPendingConsentSession(null);
-          setSessionEnded(false);
-        }, 2200);
+        triggerSessionTermination();
       }
     });
 
-    return () => unsubscribe();
-  }, []);
+    // 2. High-frequency active poll: if instructor ends session, student exits in <= 1.5s
+    const pollInterval = setInterval(() => {
+      fetch(`${getApiBase()}/api/session/status`, { cache: "no-store" })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.emergency_number) setEmergencyNumber(data.emergency_number);
+          if (data.session && !data.session.is_active && session) {
+            triggerSessionTermination();
+          }
+        })
+        .catch(() => {});
+    }, 1500);
 
-  const [emergencyNumber, setEmergencyNumber] = useState<string>("112");
-
-  useEffect(() => {
-    fetch(`${getApiBase()}/api/session/status`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.emergency_number) {
-          setEmergencyNumber(data.emergency_number);
+    // 3. BroadcastChannel cross-tab instant notification
+    let bc: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== "undefined") {
+      bc = new BroadcastChannel("focuslock-session-sync");
+      bc.onmessage = (e) => {
+        if (e.data?.type === "SESSION_ENDED") {
+          triggerSessionTermination();
         }
-      })
-      .catch(() => {});
-  }, []);
+      };
+    }
+
+    // 4. LocalStorage change listener
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "fl_session_active" && e.newValue === "false") {
+        triggerSessionTermination();
+      }
+    };
+    window.addEventListener("storage", onStorage);
+
+    return () => {
+      unsubscribe();
+      clearInterval(pollInterval);
+      if (bc) bc.close();
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [session]);
 
   const handlePunchSuccess = (data: StudentSession) => {
     // Transition immediately to lecture mode with kiosk containment active!

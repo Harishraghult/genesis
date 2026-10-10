@@ -9,8 +9,9 @@ export interface StudentRosterItem {
   seat: string;
   joined_at: number;
   last_seen: number;
-  attendance_status: string; // "VERIFIED_PRESENT" | "NETWORK_VERIFICATION_NEEDED" | "ABSENT"
+  attendance_status: string; // "VERIFIED_PRESENT" | "LEFT_MIDDLE" | "NETWORK_VERIFICATION_NEEDED" | "ABSENT"
   marked_by?: string; // "qr" | "instructor"
+  leave_count?: number;
   quiz_submitted?: boolean;
   anomaly_flag?: string;
 }
@@ -24,7 +25,7 @@ interface LiveMatrixProps {
   busyId?: string | null;
 }
 
-type Filter = "ALL" | "PRESENT" | "ABSENT" | "FLAGGED";
+type Filter = "ALL" | "PRESENT" | "LEFT_MIDDLE" | "ABSENT" | "FLAGGED";
 
 export default function LiveMatrix({
   students,
@@ -39,9 +40,10 @@ export default function LiveMatrix({
 
   const counts = useMemo(() => {
     const present = students.filter((s) => s.attendance_status === "VERIFIED_PRESENT").length;
+    const leftMiddle = students.filter((s) => s.attendance_status === "LEFT_MIDDLE").length;
     const flagged = students.filter((s) => s.attendance_status === "NETWORK_VERIFICATION_NEEDED").length;
     const absent = students.filter((s) => s.attendance_status === "ABSENT").length;
-    return { present, flagged, absent, total: students.length };
+    return { present, leftMiddle, flagged, absent, total: students.length };
   }, [students]);
 
   const visible = useMemo(() => {
@@ -49,6 +51,7 @@ export default function LiveMatrix({
     return [...students]
       .filter((s) => {
         if (filter === "PRESENT") return s.attendance_status === "VERIFIED_PRESENT";
+        if (filter === "LEFT_MIDDLE") return s.attendance_status === "LEFT_MIDDLE";
         if (filter === "ABSENT") return s.attendance_status === "ABSENT";
         if (filter === "FLAGGED") return s.attendance_status === "NETWORK_VERIFICATION_NEEDED";
         return true;
@@ -56,6 +59,27 @@ export default function LiveMatrix({
       .filter((s) => !q || s.student_name.toLowerCase().includes(q) || s.student_id.toLowerCase().includes(q))
       .sort((a, b) => a.student_id.localeCompare(b.student_id));
   }, [students, filter, query]);
+
+  const handleExportCSV = () => {
+    const headers = ["Student ID", "Full Name", "Seat", "Attendance Status", "Violations / Leaves", "Joined At", "Marked By"];
+    const rows = students.map((s) => [
+      s.student_id,
+      `"${s.student_name}"`,
+      `"${s.seat}"`,
+      s.attendance_status === "VERIFIED_PRESENT" ? "PRESENT" : s.attendance_status === "LEFT_MIDDLE" ? "LEFT IN MIDDLE" : s.attendance_status,
+      s.leave_count || 0,
+      s.joined_at ? new Date(s.joined_at * 1000).toLocaleTimeString() : "—",
+      s.marked_by || "system",
+    ]);
+    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `attendance_log_CS402_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const chip = (f: Filter, label: string, n: number, cls: string) => (
     <button
@@ -75,16 +99,22 @@ export default function LiveMatrix({
         <div>
           <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
             <Monitor className="w-5 h-5 text-cyan-400" />
-            Attendance Register
+            Classroom Attendance Log
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            Access logged under audit record <span className="font-mono text-cyan-400">{auditId || "active"}</span>.
+            Real-time verification log synced with enrolled mock roster.
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleExportCSV}
+            className="px-3 py-1 bg-cyan-950 hover:bg-cyan-900 border border-cyan-700 text-cyan-300 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+          >
+            Download CSV
+          </button>
           <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-950/80 border border-emerald-800 rounded-full text-xs font-mono text-emerald-400 font-semibold">
             <ShieldCheck className="w-3.5 h-3.5" />
-            {counts.present + counts.flagged}/{counts.total} present
+            {counts.present}/{counts.total} present
           </div>
           {onCloseRoster && (
             <button
@@ -101,8 +131,8 @@ export default function LiveMatrix({
         <div className="flex flex-wrap gap-2">
           {chip("ALL", "All", counts.total, "bg-slate-800 border-slate-600 text-white")}
           {chip("PRESENT", "Present", counts.present, "bg-emerald-950 border-emerald-700 text-emerald-300")}
+          {chip("LEFT_MIDDLE", "Left in Middle", counts.leftMiddle, "bg-amber-950 border-amber-600 text-amber-300")}
           {chip("ABSENT", "Absent", counts.absent, "bg-rose-950 border-rose-700 text-rose-300")}
-          {chip("FLAGGED", "Verify", counts.flagged, "bg-amber-950 border-amber-700 text-amber-300")}
         </div>
         <div className="relative sm:ml-auto">
           <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2.5" />
@@ -117,23 +147,25 @@ export default function LiveMatrix({
       </div>
 
       <p className="mb-3 text-[11px] text-slate-500">
-        Network flags are advisory only and never affect grades automatically. Use the buttons to mark attendance manually
-        (e.g. a student without a phone). Every manual mark is audit-logged.
+        Categorized attendance data: shows who is currently present, who left the lecture in the middle (tab switched), and who never checked in from the mock roster.
       </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 overflow-y-auto max-h-[560px] pr-1">
         {visible.map((student) => {
           const status = student.attendance_status;
           const isFlagged = status === "NETWORK_VERIFICATION_NEEDED" || status === "PROXY_FLAGGED";
+          const isLeftMiddle = status === "LEFT_MIDDLE";
           const isAbsent = status === "ABSENT";
-          const isPresent = !isFlagged && !isAbsent;
+          const isPresent = status === "VERIFIED_PRESENT";
           const busy = busyId === student.student_id;
 
           return (
             <div
               key={student.student_id}
               className={`rounded-xl p-4 border transition-all duration-300 ${
-                isFlagged
+                isLeftMiddle
+                  ? "bg-amber-950/30 border-amber-500/70 shadow-amber-950/40"
+                  : isFlagged
                   ? "bg-amber-950/20 border-amber-600/60"
                   : isAbsent
                   ? "bg-slate-950/50 border-slate-800 opacity-80"
@@ -147,7 +179,11 @@ export default function LiveMatrix({
                     {student.student_id} · <span className="text-slate-300">{student.seat}</span>
                   </span>
                 </div>
-                {isFlagged ? (
+                {isLeftMiddle ? (
+                  <span className="shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold text-amber-300 bg-amber-950/90 border border-amber-600 px-2 py-0.5 rounded-md animate-pulse">
+                    <ShieldAlert className="w-3 h-3" /> Left Middle ({student.leave_count || 1}×)
+                  </span>
+                ) : isFlagged ? (
                   <span className="shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold text-amber-300 bg-amber-950/90 border border-amber-700/80 px-2 py-0.5 rounded-md">
                     <ShieldAlert className="w-3 h-3" /> Verify
                   </span>

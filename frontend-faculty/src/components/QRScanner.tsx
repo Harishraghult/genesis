@@ -74,10 +74,20 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
       else if (msg.type === "SESSION_SNAPSHOT" && msg.session) setSessionActive(!!msg.session.is_active);
     });
 
+    let bc: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== "undefined") {
+      bc = new BroadcastChannel("focuslock-session-sync");
+      bc.onmessage = (e) => {
+        if (e.data?.type === "SESSION_STARTED") setSessionActive(true);
+        else if (e.data?.type === "SESSION_ENDED") setSessionActive(false);
+      };
+    }
+
     return () => {
       cancelled = true;
       clearInterval(poll);
       unsub();
+      if (bc) bc.close();
     };
   }, []);
 

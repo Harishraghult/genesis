@@ -217,10 +217,22 @@ export default function FacultyDashboard() {
     setSessionActive(false);
     setPulseActive(false);
     try {
+      localStorage.setItem("fl_session_active", "false");
+      if (typeof BroadcastChannel !== "undefined") {
+        const bc = new BroadcastChannel("focuslock-session-sync");
+        bc.postMessage({ type: "SESSION_ENDED" });
+        bc.close();
+      }
+    } catch {}
+
+    try {
       await fetch(`${getApiBase()}/api/session/end`, {
         method: "POST",
       });
       fetchStatus();
+      // Automatically unlock/show the roster so teacher sees the final attendance log
+      setIsRosterUnlocked(true);
+      fetchRoster(instructorKeyInput);
     } catch (e) {
       console.warn("Session ended locally:", e);
     }
