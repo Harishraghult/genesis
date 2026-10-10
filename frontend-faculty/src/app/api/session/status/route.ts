@@ -1,9 +1,16 @@
 import { NextResponse } from "next/server";
-import { SESSION_STATE, computeMetrics } from "@/lib/sessionStore";
+import { SESSION_STATE, computeMetrics, syncFromDisk } from "@/lib/sessionStore";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  syncFromDisk();
+
+  // If session has not been explicitly ended, ensure it remains active
+  if (!SESSION_STATE.is_active && SESSION_STATE.ended_at === 0) {
+    SESSION_STATE.is_active = true;
+  }
+
   const summary = computeMetrics();
   return NextResponse.json({
     session: {

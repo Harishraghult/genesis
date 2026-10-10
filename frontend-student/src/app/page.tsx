@@ -49,18 +49,24 @@ export default function StudentPage() {
       }
     });
 
-    // 2. High-frequency active poll: if instructor ends session, student exits in <= 1.5s
+    // 2. Active poll: terminate ONLY when instructor explicitly stops session AFTER student joined
     const pollInterval = setInterval(() => {
       fetch(`${getApiBase()}/api/session/status`, { cache: "no-store" })
         .then((res) => res.json())
         .then((data) => {
           if (data.emergency_number) setEmergencyNumber(data.emergency_number);
-          if (data.session && !data.session.is_active && session) {
-            triggerSessionTermination();
+          if (session && data.session) {
+            const studentJoinedAt = (session as any).joined_at || 0;
+            const sessionEndedAt = data.session.ended_at || 0;
+            const isSessionInactive = data.session.is_active === false;
+
+            if (isSessionInactive && sessionEndedAt > 0 && sessionEndedAt >= (studentJoinedAt - 5)) {
+              triggerSessionTermination();
+            }
           }
         })
         .catch(() => {});
-    }, 1500);
+    }, 2500);
 
     // 3. BroadcastChannel cross-tab instant notification
     let bc: BroadcastChannel | null = null;

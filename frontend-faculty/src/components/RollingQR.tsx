@@ -21,8 +21,8 @@ interface RollingQRProps {
   onStart: () => void;
 }
 
-// Deterministic in-browser 15-second TOTP generator (fallback when backend is connecting/offline)
-function getLocalFallbackTotp(stepSeconds: number = 15): QRData {
+// Deterministic in-browser 30-second TOTP generator (RFC 6238 standard)
+function getLocalFallbackTotp(stepSeconds: number = 30): QRData {
   const now = Math.floor(Date.now() / 1000);
   const epochWindow = Math.floor(now / stepSeconds);
   const expiresIn = stepSeconds - (now % stepSeconds);
@@ -55,7 +55,7 @@ function getLocalFallbackTotp(stepSeconds: number = 15): QRData {
 
 export default function RollingQR({ active, starting, onStart }: RollingQRProps) {
   const [qrData, setQrData] = useState<QRData | null>(null);
-  const [secondsRemaining, setSecondsRemaining] = useState<number>(15);
+  const [secondsRemaining, setSecondsRemaining] = useState<number>(30);
   const [isCloudConnected, setIsCloudConnected] = useState<boolean>(false);
   const expiresAt = useRef<number>(0);
 
@@ -77,7 +77,7 @@ export default function RollingQR({ active, starting, onStart }: RollingQRProps)
     }
 
     // High-availability fallback: generate rolling QR locally so projector never breaks
-    const fallback = getLocalFallbackTotp(15);
+    const fallback = getLocalFallbackTotp(30);
     setQrData(fallback);
     setIsCloudConnected(false);
     expiresAt.current = Date.now() + (fallback.expires_in + 1) * 1000;

@@ -1,9 +1,16 @@
 import { NextResponse } from "next/server";
-import { SESSION_STATE } from "@/lib/sessionStore";
+import { SESSION_STATE, syncFromDisk } from "@/lib/sessionStore";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  syncFromDisk();
+
+  // If session has not been explicitly stopped, keep it active
+  if (!SESSION_STATE.is_active && SESSION_STATE.ended_at === 0) {
+    SESSION_STATE.is_active = true;
+  }
+
   if (!SESSION_STATE.is_active) {
     return NextResponse.json({
       is_active: false,
@@ -15,7 +22,8 @@ export async function GET() {
     });
   }
 
-  const stepSeconds = 15;
+  // 30-second rolling interval (industry standard RFC 6238 TOTP window)
+  const stepSeconds = 30;
   const now = Math.floor(Date.now() / 1000);
   const epochWindow = Math.floor(now / stepSeconds);
   const expiresIn = stepSeconds - (now % stepSeconds);

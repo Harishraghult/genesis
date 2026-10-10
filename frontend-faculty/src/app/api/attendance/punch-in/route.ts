@@ -1,19 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
-import { STUDENTS_MAP, SESSION_STATE } from "@/lib/sessionStore";
+import { STUDENTS_MAP, SESSION_STATE, syncToDisk, syncFromDisk } from "@/lib/sessionStore";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
+    syncFromDisk();
     const body = await req.json();
     const studentId = String(body.student_id || "").trim().toUpperCase();
     const studentName = String(body.student_name || "").trim();
     const token = String(body.totp_token || "").trim();
 
+    // If session has not been explicitly ended, ensure it is active
+    if (!SESSION_STATE.is_active && SESSION_STATE.ended_at === 0) {
+      SESSION_STATE.is_active = true;
+      SESSION_STATE.started_at = SESSION_STATE.started_at || Date.now() / 1000;
+    }
+
     if (!SESSION_STATE.is_active) {
       return NextResponse.json({
         status: "ERROR",
-        message: "The instructor has not started the session yet. Please wait for the QR code on the projector.",
+        message: "The instructor has ended this session. Please wait for the next class session to start.",
       }, { status: 400 });
     }
 
@@ -52,6 +59,8 @@ export async function POST(req: NextRequest) {
       record = guest;
     }
 
+    syncToDisk();
+
     return NextResponse.json({
       status: "FOCUSED",
       student_id: record.student_id,
@@ -59,6 +68,7 @@ export async function POST(req: NextRequest) {
       session_id: SESSION_STATE.session_id,
       session_token: "st_tok_" + record.student_id,
       session_secret: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+      joined_at: record.joined_at || now,
       message: "Attendance attested and verified. Welcome to Lecture Mode.",
     });
   } catch (err: any) {

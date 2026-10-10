@@ -16,6 +16,7 @@ interface StudentSession {
   session_token: string;
   session_secret: string;
   status: string;
+  joined_at?: number;
 }
 
 export default function StudentPage() {
@@ -32,11 +33,28 @@ export default function StudentPage() {
   useEffect(() => { sessionRef.current = session; }, [session]);
   useEffect(() => { sessionEndedRef.current = sessionEnded; }, [sessionEnded]);
 
+  // Restore session if user refreshes page while in lecture mode
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem("fl_active_student_session");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.student_id && parsed.session_id) {
+          setSession(parsed);
+          sessionRef.current = parsed;
+        }
+      }
+    } catch {}
+  }, []);
+
   // Termination — safe to call multiple times (idempotent via ref guard)
   const triggerSessionTermination = useCallback(() => {
     if (sessionEndedRef.current) return;
     setSessionEnded(true);
     sessionEndedRef.current = true;
+    try {
+      sessionStorage.removeItem("fl_active_student_session");
+    } catch {}
     if (typeof document !== "undefined" && document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
     }
@@ -59,19 +77,31 @@ export default function StudentPage() {
       }
     });
 
-    // 2. High-frequency active poll: exit in <=2s when instructor stops session.
-    // KEY FIX: read sessionRef.current (ref) — not session (stale closure at effect-mount time)
+    // 2. Active poll: terminate ONLY when instructor explicitly stops session AFTER student joined
     const pollInterval = setInterval(() => {
       fetch(`${getApiBase()}/api/session/status`, { cache: "no-store" })
         .then((res) => res.json())
         .then((data) => {
           if (data.emergency_number) setEmergencyNumber(data.emergency_number);
-          if (data.session && !data.session.is_active && sessionRef.current !== null) {
-            triggerSessionTermination();
+
+          const currentStudent = sessionRef.current;
+          if (currentStudent && data.session) {
+            const studentJoinedAt = currentStudent.joined_at || 0;
+            const sessionEndedAt = data.session.ended_at || 0;
+            const isSessionInactive = data.session.is_active === false;
+
+            // ONLY terminate if:
+            // 1. Session is marked inactive
+            // 2. sessionEndedAt > 0 (instructor actually clicked "Stop Session")
+            // 3. sessionEndedAt >= (studentJoinedAt - 5) (stop happened during or after student's presence)
+            // NEVER terminate if ended_at is 0 or uninitialized!
+            if (isSessionInactive && sessionEndedAt > 0 && sessionEndedAt >= (studentJoinedAt - 5)) {
+              triggerSessionTermination();
+            }
           }
         })
         .catch(() => {});
-    }, 2000);
+    }, 2500);
 
     // 3. BroadcastChannel cross-tab instant notification
     let bc: BroadcastChannel | null = null;
@@ -102,9 +132,16 @@ export default function StudentPage() {
   }, []); // empty deps — poll reads sessionRef so stale closures are impossible
 
   const handlePunchSuccess = (data: StudentSession) => {
+    const sessionWithTime: StudentSession = {
+      ...data,
+      joined_at: data.joined_at || Math.floor(Date.now() / 1000),
+    };
     setKioskMode(true);
-    setSession(data);
-    sessionRef.current = data;
+    setSession(sessionWithTime);
+    sessionRef.current = sessionWithTime;
+    try {
+      sessionStorage.setItem("fl_active_student_session", JSON.stringify(sessionWithTime));
+    } catch {}
     if (typeof document !== "undefined" && document.documentElement.requestFullscreen) {
       document.documentElement.requestFullscreen().catch(() => {});
     }
@@ -119,6 +156,9 @@ export default function StudentPage() {
     setShowExitConfirm(false);
     setSession(null);
     sessionRef.current = null;
+    try {
+      sessionStorage.removeItem("fl_active_student_session");
+    } catch {}
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
     }

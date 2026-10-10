@@ -259,6 +259,14 @@ export default function FacultyDashboard() {
     setStarting(true);
     setSessionActive(true);
     try {
+      localStorage.setItem("fl_session_active", "true");
+      if (typeof BroadcastChannel !== "undefined") {
+        const bc = new BroadcastChannel("focuslock-session-sync");
+        bc.postMessage({ type: "SESSION_STARTED" });
+        bc.close();
+      }
+    } catch {}
+    try {
       const res = await fetch(`${getApiBase()}/api/session/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

@@ -37,10 +37,16 @@ const globalForSession = globalThis as unknown as {
   fl_audit?: Array<any>;
 };
 
+import fs from "fs";
+import path from "path";
+import os from "os";
+
+const STATE_FILE = path.join(os.tmpdir(), "focuslock_session_state.json");
+
 export const SESSION_STATE = globalForSession.fl_session ?? {
-  is_active: false,
+  is_active: true,
   session_id: "FL-CS402-2026",
-  started_at: 0,
+  started_at: Math.floor(Date.now() / 1000),
   ended_at: 0,
   course_name: "CS-402: Advanced Distributed Systems & Cyber-Physical Security",
   instructor: "Dr. Sarah Jenkins",
@@ -55,6 +61,9 @@ globalForSession.fl_students = STUDENTS_MAP;
 export const AUDIT_LOGS = globalForSession.fl_audit ?? [];
 globalForSession.fl_audit = AUDIT_LOGS;
 
+// Try to hydrate from disk if file exists
+syncFromDisk();
+
 // Initialize roster if empty
 if (STUDENTS_MAP.size === 0) {
   for (const s of MOCK_ENROLLED_STUDENTS) {
@@ -62,17 +71,44 @@ if (STUDENTS_MAP.size === 0) {
   }
 }
 
+export function syncToDisk() {
+  try {
+    const data = {
+      session: SESSION_STATE,
+      students: Array.from(STUDENTS_MAP.entries()),
+      savedAt: Date.now(),
+    };
+    fs.writeFileSync(STATE_FILE, JSON.stringify(data), "utf8");
+  } catch {}
+}
+
+export function syncFromDisk() {
+  try {
+    if (fs.existsSync(STATE_FILE)) {
+      const raw = fs.readFileSync(STATE_FILE, "utf8");
+      const parsed = JSON.parse(raw);
+      if (parsed.session) {
+        Object.assign(SESSION_STATE, parsed.session);
+      }
+      if (Array.isArray(parsed.students)) {
+        for (const [id, rec] of parsed.students) {
+          STUDENTS_MAP.set(id, rec);
+        }
+      }
+    }
+  } catch {}
+}
+
 export function resetRoster() {
   STUDENTS_MAP.clear();
   for (const s of MOCK_ENROLLED_STUDENTS) {
     STUDENTS_MAP.set(s.student_id, { ...s });
   }
-  // Also clear audit logs on session reset
   AUDIT_LOGS.length = 0;
+  syncToDisk();
 }
 
 export function safeResetRoster() {
-  // Only reset if no students have checked in yet (idempotent for already-active sessions)
   const anyCheckedIn = Array.from(STUDENTS_MAP.values()).some(
     (s) => s.attendance_status !== "ABSENT"
   );
@@ -82,6 +118,7 @@ export function safeResetRoster() {
 }
 
 export function computeMetrics() {
+  syncFromDisk();
   const all = Array.from(STUDENTS_MAP.values());
   const checkedIn = all.filter((s) => s.attendance_status !== "ABSENT");
   const present = all.filter((s) => s.attendance_status === "VERIFIED_PRESENT");

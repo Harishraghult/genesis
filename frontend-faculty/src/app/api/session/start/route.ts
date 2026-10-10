@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { SESSION_STATE, resetRoster, safeResetRoster } from "@/lib/sessionStore";
+import { SESSION_STATE, resetRoster, safeResetRoster, syncToDisk } from "@/lib/sessionStore";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +14,7 @@ export async function POST() {
   SESSION_STATE.is_active = true;
   SESSION_STATE.started_at = Date.now() / 1000;
   SESSION_STATE.ended_at = 0;
+  syncToDisk();
 
   return NextResponse.json({
     ok: true,
