@@ -33,6 +33,14 @@ export default function StudentPage() {
         setPulseQuiz(msg.quiz);
       } else if (msg.type === "SESSION_ENDED") {
         setSessionEnded(true);
+        if (typeof document !== "undefined" && document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        }
+        setTimeout(() => {
+          setSession(null);
+          setPendingConsentSession(null);
+          setSessionEnded(false);
+        }, 2200);
       }
     });
 
@@ -176,9 +184,21 @@ export default function StudentPage() {
 
           {/* Session Ended Notification */}
           {sessionEnded && (
-            <div className="p-3 bg-cyan-950/80 border border-cyan-800 rounded-xl text-xs text-cyan-200 flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-cyan-400 shrink-0" />
-              <span>The instructor has concluded the lecture session. Locks released.</span>
+            <div className="p-4 bg-cyan-950/90 border border-cyan-700 rounded-xl text-xs text-cyan-200 flex flex-col gap-2.5 shadow-xl animate-fade-in">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-cyan-400 shrink-0" />
+                <span className="font-semibold">Instructor stopped the session. Releasing locks and returning to Idle screen...</span>
+              </div>
+              <button
+                onClick={() => {
+                  setSession(null);
+                  setPendingConsentSession(null);
+                  setSessionEnded(false);
+                }}
+                className="w-full py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-lg text-xs transition-colors"
+              >
+                Return to Check-In Screen
+              </button>
             </div>
           )}
 

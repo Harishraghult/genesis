@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Camera, KeyRound, ArrowRight, ShieldCheck, AlertCircle, Loader2, Hourglass, CheckCircle2 } from "lucide-react";
+import { Camera, KeyRound, ArrowRight, ShieldCheck, AlertCircle, Loader2, Hourglass, CheckCircle2, UserCheck } from "lucide-react";
 import { getApiBase } from "@/lib/config";
 import { studentWsClient } from "@/lib/websocket";
 
@@ -19,40 +19,60 @@ interface QRScannerProps {
 const LS_ID = "fl_student_id";
 const LS_NAME = "fl_student_name";
 
+const ENROLLED_STUDENTS = [
+  { id: "21CS204", name: "Harish Raghul", seat: "Row 1, #01" },
+  { id: "21CS042", name: "Marcus Vance", seat: "Row 2, #04" },
+  { id: "21CS089", name: "Aaliyah Chen", seat: "Row 1, #08" },
+  { id: "21CS115", name: "Devon Miller", seat: "Row 4, #12" },
+  { id: "21CS074", name: "Rohan Iyer", seat: "Row 3, #06" },
+  { id: "21CS150", name: "Priya Sharma", seat: "Row 2, #10" },
+  { id: "21CS099", name: "Alex Rivera", seat: "Row 5, #02" },
+  { id: "21CS033", name: "Zara Patel", seat: "Row 3, #14" },
+];
+
 export default function QRScanner({ onSuccess }: QRScannerProps) {
-  const [studentId, setStudentId] = useState<string>("");
-  const [studentName, setStudentName] = useState<string>("");
+  const [studentId, setStudentId] = useState<string>("21CS204");
+  const [studentName, setStudentName] = useState<string>("Harish Raghul");
   const [totpToken, setTotpToken] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [cameraActive, setCameraActive] = useState<boolean>(false);
-  const [sessionActive, setSessionActive] = useState<boolean | null>(null);
+  const [sessionActive, setSessionActive] = useState<boolean>(false); // Defaults to Idle state!
   const [scanned, setScanned] = useState<boolean>(false);
   const submittingRef = useRef(false);
 
   // Restore remembered identity
   useEffect(() => {
     try {
-      setStudentId(localStorage.getItem(LS_ID) || "");
-      setStudentName(localStorage.getItem(LS_NAME) || "");
+      const savedId = localStorage.getItem(LS_ID);
+      const savedName = localStorage.getItem(LS_NAME);
+      if (savedId) setStudentId(savedId);
+      if (savedName) setStudentName(savedName);
     } catch {}
   }, []);
 
-  // Know whether the teacher has started the session (poll + live WS)
+  // Poll session status + live WebSocket
   useEffect(() => {
     let cancelled = false;
     const check = () =>
       fetch(`${getApiBase()}/api/session/status`, { cache: "no-store" })
         .then((r) => r.json())
-        .then((d) => !cancelled && setSessionActive(!!d.session?.is_active))
-        .catch(() => !cancelled && setSessionActive(null));
+        .then((d) => {
+          if (!cancelled) setSessionActive(!!d.session?.is_active);
+        })
+        .catch(() => {
+          if (!cancelled) setSessionActive(false); // Graceful idle fallback
+        });
+
     check();
-    const poll = setInterval(check, 5000);
+    const poll = setInterval(check, 4000);
+
     const unsub = studentWsClient.subscribe((msg: any) => {
       if (msg.type === "SESSION_STARTED") setSessionActive(true);
       else if (msg.type === "SESSION_ENDED") setSessionActive(false);
       else if (msg.type === "SESSION_SNAPSHOT" && msg.session) setSessionActive(!!msg.session.is_active);
     });
+
     return () => {
       cancelled = true;
       clearInterval(poll);
@@ -76,6 +96,7 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
       submittingRef.current = true;
       setLoading(true);
       setErrorMsg(null);
+
       try {
         localStorage.setItem(LS_ID, id);
         localStorage.setItem(LS_NAME, name);
@@ -85,8 +106,6 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
         const res = await fetch(`${getApiBase()}/api/attendance/punch-in`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          // Browsers cannot read Wi-Fi BSSIDs; only the Android companion sends a room-AP attestation.
-          // Data minimization: no raw network or device identifiers are sent.
           body: JSON.stringify({
             student_id: id,
             student_name: name,
@@ -111,18 +130,8 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
           });
         }
       } catch (err: any) {
-        // High-availability fallback when cloud backend is waking up or connecting
-        const enrolled = [
-          { id: "21CS204", name: "Harish Raghul" },
-          { id: "21CS042", name: "Marcus Vance" },
-          { id: "21CS089", name: "Aaliyah Chen" },
-          { id: "21CS115", name: "Devon Miller" },
-          { id: "21CS074", name: "Rohan Iyer" },
-          { id: "21CS150", name: "Priya Sharma" },
-          { id: "21CS099", name: "Alex Rivera" },
-          { id: "21CS033", name: "Zara Patel" },
-        ];
-        const match = enrolled.find(
+        // High-availability fallback when cloud backend is waking up or in standalone mode
+        const match = ENROLLED_STUDENTS.find(
           (s) => s.id.toUpperCase() === id.toUpperCase() || s.name.toLowerCase() === name.toLowerCase()
         );
         if (match) {
@@ -147,7 +156,6 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
     [studentId, studentName, onSuccess]
   );
 
-  // Keep latest submit in a ref so the camera callback doesn't go stale
   const submitRef = useRef(submit);
   useEffect(() => {
     submitRef.current = submit;
@@ -182,7 +190,7 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
                   .catch(() => {})
                   .finally(() => {
                     setCameraActive(false);
-                    submitRef.current(code); // auto check-in right after scan
+                    submitRef.current(code);
                   });
               }
             },
@@ -191,7 +199,7 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
           .catch((err: any) => {
             console.warn("Camera start error:", err);
             setErrorMsg(
-              "Camera unavailable. Allow camera permission (requires HTTPS) or type the 6-digit code instead."
+              "Camera unavailable. Allow camera permission or type the 6-digit code shown on the screen."
             );
             setCameraActive(false);
           });
@@ -211,7 +219,15 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
     submit(totpToken.trim());
   };
 
-  const waiting = sessionActive === false;
+  const handleSelectQuickStudent = (sid: string) => {
+    const s = ENROLLED_STUDENTS.find((item) => item.id === sid);
+    if (s) {
+      setStudentId(s.id);
+      setStudentName(s.name);
+      setErrorMsg(null);
+    }
+  };
+
   const identityReady = studentId.trim() && studentName.trim();
 
   return (
@@ -220,25 +236,20 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
         <div className="w-12 h-12 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl flex items-center justify-center mx-auto mb-3 text-emerald-400">
           <ShieldCheck className="w-6 h-6" />
         </div>
-        <h2 className="text-xl font-bold text-slate-100">FocusLock Check-In</h2>
-        <p className="text-xs text-slate-400 mt-1">Scan the QR code on the classroom projector.</p>
+        <h2 className="text-xl font-bold text-slate-100">FocusLock Student Check-In</h2>
+        <p className="text-xs text-slate-400 mt-1">Scan the rotating QR code projected on the classroom screen.</p>
       </div>
 
-      {/* Session status */}
-      {waiting ? (
+      {/* Session Status Banner */}
+      {!sessionActive ? (
         <div className="mb-4 p-3 bg-amber-950/60 border border-amber-800 rounded-xl text-amber-200 text-xs flex items-center gap-2">
           <Hourglass className="w-4 h-4 shrink-0 text-amber-400 animate-pulse" />
-          <span>Waiting for your instructor to start the session…</span>
-        </div>
-      ) : sessionActive ? (
-        <div className="mb-4 p-3 bg-emerald-950/60 border border-emerald-800 rounded-xl text-emerald-200 text-xs flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
-          <span>Session is live — scan now.</span>
+          <span>Session is Idle — Waiting for instructor to start session.</span>
         </div>
       ) : (
-        <div className="mb-4 p-3 bg-slate-950 border border-slate-800 rounded-xl text-slate-400 text-xs flex items-center gap-2">
-          <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
-          <span>Connecting to FocusLock server…</span>
+        <div className="mb-4 p-3 bg-emerald-950/60 border border-emerald-800 rounded-xl text-emerald-200 text-xs flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+          <span>Session is Live — Scan QR code or enter 6-digit token.</span>
         </div>
       )}
 
@@ -248,6 +259,24 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
           <span>{errorMsg}</span>
         </div>
       )}
+
+      {/* Quick Enrolled Student Dropdown for Mobile Convenience */}
+      <div className="mb-3.5 p-2.5 bg-slate-950/80 border border-slate-800 rounded-xl flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1.5 shrink-0">
+          <UserCheck className="w-3.5 h-3.5 text-cyan-400" /> Roster:
+        </span>
+        <select
+          value={studentId}
+          onChange={(e) => handleSelectQuickStudent(e.target.value)}
+          className="bg-slate-900 border border-slate-700 text-xs text-cyan-300 rounded-lg px-2 py-1 focus:outline-none w-full"
+        >
+          {ENROLLED_STUDENTS.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name} ({s.id})
+            </option>
+          ))}
+        </select>
+      </div>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
         <div className="grid grid-cols-5 gap-2">
@@ -290,14 +319,14 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
               onClick={() => setCameraActive(false)}
               className="w-full py-2 bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700"
             >
-              Cancel
+              Cancel Camera Scan
             </button>
           </div>
         ) : (
           <button
             id="scan-qr-btn"
             type="button"
-            disabled={!identityReady || waiting || loading}
+            disabled={!identityReady || loading}
             onClick={() => {
               setErrorMsg(null);
               setCameraActive(true);
@@ -305,12 +334,12 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
             className="w-full py-4 px-4 bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 active:scale-[0.98] transition-transform disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Camera className="w-5 h-5" />}
-            {loading ? (scanned ? "Scanned — verifying…" : "Verifying…") : "Scan QR & Check In"}
+            {loading ? (scanned ? "Scanned — verifying…" : "Verifying…") : "Scan QR & Enter Lecture Mode"}
           </button>
         )}
 
         <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-slate-600">
-          <div className="flex-1 h-px bg-slate-800" /> or type the code <div className="flex-1 h-px bg-slate-800" />
+          <div className="flex-1 h-px bg-slate-800" /> or enter 6-digit code <div className="flex-1 h-px bg-slate-800" />
         </div>
 
         <div className="flex gap-2">
@@ -323,14 +352,14 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
               value={totpToken}
               onChange={(e) => setTotpToken(e.target.value.replace(/\D/g, ""))}
               className="w-full pl-9 pr-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm font-mono tracking-widest text-emerald-400 focus:outline-none focus:border-emerald-500"
-              placeholder="6-digit code"
+              placeholder="e.g. 849201"
             />
             <KeyRound className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
           </div>
           <button
             id="submit-code-btn"
             type="submit"
-            disabled={loading || waiting}
+            disabled={loading || !totpToken}
             className="px-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1 disabled:opacity-40"
           >
             Go <ArrowRight className="w-4 h-4" />

@@ -214,13 +214,15 @@ export default function FacultyDashboard() {
   };
 
   const handleEndSession = async () => {
+    setSessionActive(false);
+    setPulseActive(false);
     try {
       await fetch(`${getApiBase()}/api/session/end`, {
         method: "POST",
       });
-      setSessionActive(false);
+      fetchStatus();
     } catch (e) {
-      console.error("Failed to end session:", e);
+      console.warn("Session ended locally:", e);
     }
   };
 
@@ -365,18 +367,19 @@ export default function FacultyDashboard() {
               </button>
             )}
 
-            {/* End Session Button */}
+            {/* Stop / End Session Button */}
             <button
+              id="stop-session-btn"
               onClick={handleEndSession}
               disabled={!sessionActive}
               className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all flex items-center justify-center gap-2 ${
                 sessionActive
-                  ? "bg-slate-950 hover:bg-slate-800 border-slate-700 text-slate-300 hover:text-white"
+                  ? "bg-rose-950/80 hover:bg-rose-900 border-rose-700 text-rose-200 hover:text-white shadow-lg shadow-rose-950/50 cursor-pointer active:scale-95"
                   : "bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed"
               }`}
             >
-              <Power className="w-4 h-4 text-slate-400" />
-              {sessionActive ? "End Session & Release Locks" : "No Session Running"}
+              <Power className={`w-4 h-4 ${sessionActive ? "text-rose-400" : "text-slate-600"}`} />
+              {sessionActive ? "Stop Session & Release Locks" : "Session Stopped / Idle"}
             </button>
           </div>
         </div>
