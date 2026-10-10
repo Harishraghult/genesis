@@ -60,3 +60,16 @@ MOCK_QUIZZES = [
         "duration_seconds": 30
     }
 ]
+
+# Official Course Enrolled Roster for CS-402
+MOCK_ENROLLED_STUDENTS = [
+    {"student_id": "21CS204", "student_name": "Harish Raghul", "seat": "Row 1, #01"},
+    {"student_id": "21CS042", "student_name": "Marcus Vance", "seat": "Row 2, #04"},
+    {"student_id": "21CS089", "student_name": "Aaliyah Chen", "seat": "Row 1, #08"},
+    {"student_id": "21CS115", "student_name": "Devon Miller", "seat": "Row 4, #12"},
+    {"student_id": "21CS074", "student_name": "Rohan Iyer", "seat": "Row 3, #06"},
+    {"student_id": "21CS150", "student_name": "Priya Sharma", "seat": "Row 2, #10"},
+    {"student_id": "21CS099", "student_name": "Alex Rivera", "seat": "Row 5, #02"},
+    {"student_id": "21CS033", "student_name": "Zara Patel", "seat": "Row 3, #14"},
+]
+

@@ -81,3 +81,14 @@ class RosterResponse(BaseModel):
     students: List[StudentRosterRecord]
     audit_id: str
 
+class StartSessionRequest(BaseModel):
+    course_name: Optional[str] = None
+    instructor: Optional[str] = None
+    room: Optional[str] = None
+
+class MarkAttendanceRequest(BaseModel):
+    student_id: str
+    status: str = "VERIFIED_PRESENT"
+    reason: Optional[str] = "Instructor manual marking"
+
+

@@ -23,6 +23,7 @@ export default function StudentPage() {
   const [pendingConsentSession, setPendingConsentSession] = useState<StudentSession | null>(null);
   const [pulseQuiz, setPulseQuiz] = useState<any | null>(null);
   const [sessionEnded, setSessionEnded] = useState<boolean>(false);
+  const [kioskMode, setKioskMode] = useState<boolean>(true);
 
   useEffect(() => {
     const unsubscribe = studentWsClient.subscribe((msg: any) => {
@@ -58,6 +59,7 @@ export default function StudentPage() {
 
   const handleConfirmConsent = (enableKiosk: boolean) => {
     if (!pendingConsentSession) return;
+    setKioskMode(enableKiosk);
     setSession(pendingConsentSession);
     setPendingConsentSession(null);
 
@@ -181,7 +183,7 @@ export default function StudentPage() {
           )}
 
           {/* Focus Attestation & Visibility Guard */}
-          <FocusAttestation studentId={session.student_id} />
+          <FocusAttestation studentId={session.student_id} kiosk={kioskMode} active={!sessionEnded} />
 
           {/* Protected Course Slides Viewer */}
           <CourseViewer

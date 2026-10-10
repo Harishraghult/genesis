@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import RollingQR from "@/components/RollingQR";
 import LiveMatrix, { StudentRosterItem } from "@/components/LiveMatrix";
 import PresencePulse from "@/components/PresencePulse";
@@ -34,10 +34,10 @@ interface AggregateMetrics {
 
 export default function FacultyDashboard() {
   const [metrics, setMetrics] = useState<AggregateMetrics>({
-    total_joined: 3,
-    focused_count: 2,
-    distracted_count: 1,
-    focus_percentage: 66.7,
+    total_joined: 0,
+    focused_count: 0,
+    distracted_count: 0,
+    focus_percentage: 100,
     flagged_count: 0,
   });
 
@@ -52,7 +52,15 @@ export default function FacultyDashboard() {
   const [alerts, setAlerts] = useState<AnomalyEvent[]>([]);
   const [pulseActive, setPulseActive] = useState<boolean>(false);
   const [pulseResponsesCount, setPulseResponsesCount] = useState<number>(0);
-  const [sessionActive, setSessionActive] = useState<boolean>(true);
+  const [sessionActive, setSessionActive] = useState<boolean>(false);
+  const [starting, setStarting] = useState<boolean>(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  // Refs so the single WebSocket subscription always sees current values
+  const keyRef = useRef(instructorKeyInput);
+  const unlockedRef = useRef(isRosterUnlocked);
+  useEffect(() => { keyRef.current = instructorKeyInput; }, [instructorKeyInput]);
+  useEffect(() => { unlockedRef.current = isRosterUnlocked; }, [isRosterUnlocked]);
 
   // Fetch initial public session status (Aggregates Only - FERPA Compliant)
   const fetchStatus = async () => {
@@ -63,7 +71,7 @@ export default function FacultyDashboard() {
         if (data.metrics) {
           setMetrics(data.metrics);
         }
-        setSessionActive(data.session?.is_active ?? true);
+        setSessionActive(data.session?.is_active ?? false);
       }
     } catch (e) {
       console.error("Failed to load initial session status:", e);
@@ -100,16 +108,21 @@ export default function FacultyDashboard() {
   useEffect(() => {
     fetchStatus();
 
-    // Subscribe to backend WebSockets (receives aggregate updates)
+    // One stable subscription; reads latest key/unlock state via refs
     const unsubscribe = wsClient.subscribe((msg: any) => {
-      if (msg.type === "SESSION_SNAPSHOT" && msg.metrics) {
-        setMetrics(msg.metrics);
+      const refreshRoster = () => {
+        if (unlockedRef.current) fetchRoster(keyRef.current);
+      };
+      if (msg.type === "SESSION_SNAPSHOT") {
+        if (msg.metrics) setMetrics(msg.metrics);
+        if (msg.session) setSessionActive(!!msg.session.is_active);
+      } else if (msg.type === "SESSION_STARTED") {
+        setSessionActive(true);
+        if (msg.metrics) setMetrics(msg.metrics);
+        refreshRoster();
       } else if (msg.type === "AGGREGATE_METRICS_UPDATED" && msg.metrics) {
         setMetrics(msg.metrics);
-        // If roster is unlocked, refresh roster list
-        if (isRosterUnlocked) {
-          fetchRoster(instructorKeyInput);
-        }
+        refreshRoster();
       } else if (msg.type === "PRESENCE_PULSE_START") {
         setPulseActive(true);
         setPulseResponsesCount(0);
@@ -120,10 +133,13 @@ export default function FacultyDashboard() {
         setRosterStudents((prev) =>
           prev.map((s) =>
             s.student_id === msg.student_id
-              ? { ...s, attendance_status: msg.attendance_status, anomaly_flag: undefined }
+              ? { ...s, attendance_status: msg.attendance_status, anomaly_flag: undefined, marked_by: "instructor" }
               : s
           )
         );
+        fetchStatus();
+      } else if (msg.type === "ANOMALY_DETECTED") {
+        refreshRoster();
         fetchStatus();
       } else if (msg.type === "SESSION_ENDED") {
         setSessionActive(false);
@@ -131,7 +147,8 @@ export default function FacultyDashboard() {
     });
 
     return () => unsubscribe();
-  }, [isRosterUnlocked, instructorKeyInput]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleUnlockSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -207,6 +224,58 @@ export default function FacultyDashboard() {
     }
   };
 
+  const handleStartSession = async () => {
+    setStarting(true);
+    try {
+      const res = await fetch(`${getApiBase()}/api/session/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (res.ok) {
+        setSessionActive(true);
+        fetchStatus();
+        if (isRosterUnlocked) fetchRoster(instructorKeyInput);
+      }
+    } catch (e) {
+      console.error("Failed to start session:", e);
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const handleMarkAttendance = async (studentId: string, status: "PRESENT" | "ABSENT") => {
+    setBusyId(studentId);
+    try {
+      const res = await fetch(`${getApiBase()}/api/attendance/mark`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Instructor-Key": instructorKeyInput.trim() },
+        body: JSON.stringify({ student_id: studentId, status, reason: "Instructor manual marking" }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRosterStudents((prev) =>
+          prev.map((s) =>
+            s.student_id === studentId
+              ? {
+                  ...s,
+                  attendance_status: data.attendance_status,
+                  marked_by: "instructor",
+                  anomaly_flag: undefined,
+                  joined_at: s.joined_at || Date.now() / 1000,
+                }
+              : s
+          )
+        );
+        fetchStatus();
+      }
+    } catch (e) {
+      console.error("Failed to mark attendance:", e);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   return (
     <main className="min-h-screen p-4 sm:p-6 lg:p-8 max-w-[1700px] mx-auto flex flex-col gap-6">
       {/* Top Navigation & Session Telemetry Banner */}
@@ -235,7 +304,7 @@ export default function FacultyDashboard() {
         <div className="flex items-center gap-3 w-full md:w-auto overflow-x-auto pb-1 md:pb-0">
           <div className="bg-slate-950/90 border border-slate-800 px-4 py-2 rounded-xl text-center min-w-[100px]">
             <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
-              Enrolled
+              Checked In
             </span>
             <span className="text-xl font-mono font-bold text-white">{metrics.total_joined}</span>
           </div>
@@ -269,7 +338,7 @@ export default function FacultyDashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left Column: Rolling Projector QR (4 cols) */}
         <div className="lg:col-span-4 flex flex-col gap-6">
-          <RollingQR />
+          <RollingQR active={sessionActive} starting={starting} onStart={handleStartSession} />
 
           {/* Action Controls */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col gap-3">
@@ -307,7 +376,7 @@ export default function FacultyDashboard() {
               }`}
             >
               <Power className="w-4 h-4 text-slate-400" />
-              {sessionActive ? "End Session & Release Locks" : "Session Concluded"}
+              {sessionActive ? "End Session & Release Locks" : "No Session Running"}
             </button>
           </div>
         </div>
@@ -403,6 +472,8 @@ export default function FacultyDashboard() {
               auditId={rosterAuditId}
               onCloseRoster={() => setIsRosterUnlocked(false)}
               onOverrideStudent={handleOverrideStudent}
+              onMarkAttendance={handleMarkAttendance}
+              busyId={busyId}
             />
           )}
         </div>

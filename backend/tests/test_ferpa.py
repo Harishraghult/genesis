@@ -59,7 +59,7 @@ def test_roster_endpoint_authorized_and_creates_audit_log():
     
     # Verify per-student records do NOT expose a punitive 'DISTRACTED' label
     for student in data["students"]:
-        assert student["attendance_status"] in ["VERIFIED_PRESENT", "NETWORK_VERIFICATION_NEEDED", "PROXY_FLAGGED"]
+        assert student["attendance_status"] in ["VERIFIED_PRESENT", "NETWORK_VERIFICATION_NEEDED", "PROXY_FLAGGED", "ABSENT"]
         assert student["attendance_status"] != "DISTRACTED"
     
     # Verify audit log recorded the access

@@ -11,7 +11,7 @@ from .models import (
     PunchInRequest, PunchInResponse, FocusEventRequest,
     PresencePulseTrigger, QuizSubmission, StudentRosterRecord,
     SessionStatus, RosterResponse, AuditLogEntry, AggregateMetrics,
-    OverrideAttendanceRequest
+    OverrideAttendanceRequest, StartSessionRequest, MarkAttendanceRequest
 )
 from .security import (
     get_current_totp, verify_totp, create_session_jwt,
@@ -19,7 +19,7 @@ from .security import (
 )
 from .anomaly import evaluate_punch_anomaly, reset_anomaly_tracker, get_allowed_room_bssid_hashes
 from .middleware import SignedRequestGateMiddleware
-from .mock_data import MOCK_SLIDES, MOCK_TIMETABLE, MOCK_QUIZZES
+from .mock_data import MOCK_SLIDES, MOCK_TIMETABLE, MOCK_QUIZZES, MOCK_ENROLLED_STUDENTS
 
 app = FastAPI(title="FocusLock Attendance & Focus Gate", version="1.0.0")
 
@@ -42,7 +42,7 @@ ACTIVE_SESSION = {
     "instructor": MOCK_TIMETABLE["instructor"],
     "room": MOCK_TIMETABLE["room"],
     "started_at": time.time(),
-    "is_active": True
+    "is_active": False
 }
 
 # student_id -> StudentRecord dictionary
@@ -78,8 +78,13 @@ import hmac
 
 AUDIT_LOGS: List[Dict[str, Any]] = []
 
+# Only enrolled students (MOCK_ENROLLED_STUDENTS) may check in. Tests may disable this.
+ENFORCE_ENROLLMENT = True
+ENROLLED_BY_ID: Dict[str, Dict[str, Any]] = {s["student_id"].upper(): s for s in MOCK_ENROLLED_STUDENTS}
+
 def compute_aggregate_metrics() -> Dict[str, Any]:
-    students_list = list(STUDENTS_STORE.values())
+    # Absent (not yet checked-in) students are excluded from class-wide aggregates
+    students_list = [s for s in STUDENTS_STORE.values() if s.get("status") != "ABSENT"]
     total = len(students_list)
     focused = sum(1 for s in students_list if s.get("is_focused", True) and s.get("status") not in ["NETWORK_VERIFICATION_NEEDED", "PROXY_FLAGGED"])
     distracted = sum(1 for s in students_list if not s.get("is_focused", True) and s.get("status") not in ["NETWORK_VERIFICATION_NEEDED", "PROXY_FLAGGED"])
@@ -104,17 +109,24 @@ def require_instructor_auth(
         )
     return "instructor"
 
-# Prepopulate with 3 realistic students so faculty dashboard looks great immediately
-# Data minimization compliant: stores verification results only, never raw BSSIDs or raw device IDs
 def seed_students():
-    now = time.time()
-    mock_init = [
-        {"student_id": "21CS042", "student_name": "Marcus Vance", "seat": "Row 2, #04", "status": "VERIFIED_PRESENT", "is_focused": True, "network_attested": True, "device_attested": True, "joined_at": now - 340, "last_event": "JOINED", "last_seen": now, "quiz_submitted": False},
-        {"student_id": "21CS089", "student_name": "Aaliyah Chen", "seat": "Row 1, #08", "status": "VERIFIED_PRESENT", "is_focused": True, "network_attested": True, "device_attested": True, "joined_at": now - 280, "last_event": "JOINED", "last_seen": now, "quiz_submitted": False},
-        {"student_id": "21CS115", "student_name": "Devon Miller", "seat": "Row 4, #12", "status": "VERIFIED_PRESENT", "is_focused": False, "network_attested": True, "device_attested": True, "joined_at": now - 190, "last_event": "FOCUS_LOST", "last_seen": now - 45, "quiz_submitted": False},
-    ]
-    for s in mock_init:
-        STUDENTS_STORE[s["student_id"]] = s
+    """Load the enrolled roster; everyone starts ABSENT until they scan or are marked."""
+    STUDENTS_STORE.clear()
+    for s in MOCK_ENROLLED_STUDENTS:
+        STUDENTS_STORE[s["student_id"]] = {
+            "student_id": s["student_id"],
+            "student_name": s["student_name"],
+            "seat": s["seat"],
+            "status": "ABSENT",
+            "is_focused": True,
+            "network_attested": False,
+            "device_attested": False,
+            "joined_at": 0,
+            "last_event": "NOT_CHECKED_IN",
+            "last_seen": 0,
+            "quiz_submitted": False,
+            "anomaly_flag": None
+        }
 
 seed_students()
 
@@ -135,9 +147,20 @@ def current_qr():
     Returns rolling HMAC-SHA256 TOTP token, per-session salt, and allowed room AP hashes.
     Allows on-device matching without exposing or persisting raw network identifiers.
     """
+    if not ACTIVE_SESSION.get("is_active", False):
+        return {
+            "is_active": False,
+            "totp_token": "",
+            "expires_in": 0,
+            "session_id": ACTIVE_SESSION["session_id"],
+            "qr_payload": "",
+            "message": "Session has not been started by the instructor yet."
+        }
+
     token, expires_in, current_ts = get_current_totp()
     allowed_hashes = get_allowed_room_bssid_hashes(settings.SESSION_SALT)
     return {
+        "is_active": True,
         "totp_token": token,
         "expires_in": expires_in,
         "session_id": ACTIVE_SESSION["session_id"],
@@ -154,6 +177,36 @@ def current_qr():
             "bssid": settings.TARGET_BSSID
         })
     }
+
+@app.get("/api/session/enrolled-students")
+def get_enrolled_students():
+    """Public helper endpoint returning the official course enrolled student list."""
+    return {
+        "enrolled_students": MOCK_ENROLLED_STUDENTS,
+        "is_active": ACTIVE_SESSION.get("is_active", False)
+    }
+
+@app.post("/api/session/start")
+async def start_session(req: Optional[StartSessionRequest] = None):
+    """Instructor action to launch and activate the lecture attendance session."""
+    if not ACTIVE_SESSION.get("is_active", False):
+        seed_students()  # fresh attendance sheet for each new session
+        reset_anomaly_tracker()
+    ACTIVE_SESSION["is_active"] = True
+    ACTIVE_SESSION["started_at"] = time.time()
+    if req and req.course_name:
+        ACTIVE_SESSION["course_name"] = req.course_name
+    if req and req.instructor:
+        ACTIVE_SESSION["instructor"] = req.instructor
+    if req and req.room:
+        ACTIVE_SESSION["room"] = req.room
+
+    await manager.broadcast({
+        "type": "SESSION_STARTED",
+        "session": ACTIVE_SESSION,
+        "metrics": compute_aggregate_metrics()
+    })
+    return {"ok": True, "session": ACTIVE_SESSION}
 
 @app.get("/api/session/status")
 def session_status():
@@ -202,7 +255,12 @@ def get_session_roster(
             "seat": s["seat"],
             "joined_at": s["joined_at"],
             "last_seen": s["last_seen"],
-            "attendance_status": "NETWORK_VERIFICATION_NEEDED" if s.get("status") in ["NETWORK_VERIFICATION_NEEDED", "PROXY_FLAGGED"] else "VERIFIED_PRESENT",
+            "attendance_status": (
+                "NETWORK_VERIFICATION_NEEDED" if s.get("status") in ["NETWORK_VERIFICATION_NEEDED", "PROXY_FLAGGED"]
+                else "ABSENT" if s.get("status") == "ABSENT"
+                else "VERIFIED_PRESENT"
+            ),
+            "marked_by": s.get("marked_by", "qr"),
             "network_attested": s.get("network_attested", True),
             "quiz_submitted": s.get("quiz_submitted", False),
             "anomaly_flag": s.get("anomaly_flag")
@@ -224,7 +282,37 @@ def get_audit_logs(_auth: str = Depends(require_instructor_auth)):
 @app.post("/api/attendance/punch-in", response_model=PunchInResponse)
 async def punch_in(req: PunchInRequest, request: Request):
     client_ip = request.client.host if request.client else "127.0.0.1"
-    
+
+    # 0a. Session must have been started by the instructor
+    if not ACTIVE_SESSION.get("is_active", False):
+        return PunchInResponse(
+            status="ERROR",
+            student_id=req.student_id,
+            student_name=req.student_name,
+            message="The instructor has not started the session yet. Please wait for the QR code on the projector."
+        )
+
+    # 0b. Student must be on the official enrolled roster
+    enrolled = ENROLLED_BY_ID.get(req.student_id.strip().upper())
+    if ENFORCE_ENROLLMENT:
+        if not enrolled:
+            return PunchInResponse(
+                status="ERROR",
+                student_id=req.student_id,
+                student_name=req.student_name,
+                message=f"Student ID '{req.student_id}' is not enrolled in this course. Contact your instructor."
+            )
+        if enrolled["student_name"].strip().lower() != req.student_name.strip().lower():
+            return PunchInResponse(
+                status="ERROR",
+                student_id=req.student_id,
+                student_name=req.student_name,
+                message="Name does not match the enrolled record for this Student ID."
+            )
+        # Normalise to canonical roster values
+        req.student_id = enrolled["student_id"]
+        req.student_name = enrolled["student_name"]
+
     # 1. Validate Rolling TOTP (T_0 or T_-1)
     if not verify_totp(req.totp_token):
         return PunchInResponse(
@@ -247,7 +335,7 @@ async def punch_in(req: PunchInRequest, request: Request):
     
     now = time.time()
     initial_status = "NETWORK_VERIFICATION_NEEDED" if is_anomaly else "FOCUSED"
-    seat_label = f"Row {((hash(req.student_id) % 5) + 1)}, #{((hash(req.student_id) % 15) + 1):02d}"
+    seat_label = enrolled["seat"] if enrolled else f"Row {((hash(req.student_id) % 5) + 1)}, #{((hash(req.student_id) % 15) + 1):02d}"
     
     # DATA MINIMIZATION: Never persist raw BSSIDs or raw device identifiers.
     # Persist the verification result only (network_attested, device_attested).
@@ -398,6 +486,65 @@ async def override_attendance(
         "audit_id": audit_id
     }
 
+@app.post("/api/attendance/mark")
+async def mark_attendance(
+    req: MarkAttendanceRequest,
+    request: Request,
+    _auth: str = Depends(require_instructor_auth)
+):
+    """
+    Teacher manual attendance marking (PRESENT / ABSENT) for any enrolled student,
+    e.g. a student whose phone is dead. Every mark is audit-logged.
+    """
+    status = req.status.upper()
+    if status in ("PRESENT", "VERIFIED_PRESENT"):
+        status = "VERIFIED_PRESENT"
+    elif status != "ABSENT":
+        raise HTTPException(status_code=400, detail="status must be PRESENT or ABSENT")
+
+    sid = req.student_id
+    if sid not in STUDENTS_STORE:
+        enrolled = ENROLLED_BY_ID.get(sid.upper())
+        if not enrolled:
+            raise HTTPException(status_code=404, detail="Student not enrolled in this course")
+        sid = enrolled["student_id"]
+        STUDENTS_STORE[sid] = {
+            "student_id": sid, "student_name": enrolled["student_name"], "seat": enrolled["seat"],
+            "status": "ABSENT", "is_focused": True, "network_attested": False, "device_attested": False,
+            "joined_at": 0, "last_event": "NOT_CHECKED_IN", "last_seen": 0,
+            "quiz_submitted": False, "anomaly_flag": None,
+        }
+
+    now = time.time()
+    student = STUDENTS_STORE[sid]
+    student["status"] = status
+    student["anomaly_flag"] = None
+    student["is_focused"] = True
+    student["marked_by"] = "instructor"
+    student["last_event"] = f"MARKED_{status}_BY_INSTRUCTOR"
+    if status == "VERIFIED_PRESENT" and not student.get("joined_at"):
+        student["joined_at"] = now
+        student["last_seen"] = now
+
+    audit_id = f"aud_mark_{int(now)}_{secrets.token_hex(4)}"
+    AUDIT_LOGS.append({
+        "id": audit_id,
+        "action": "MANUAL_ATTENDANCE_MARKED",
+        "actor": "instructor",
+        "timestamp": now,
+        "ip_address": request.client.host if request.client else "unknown",
+        "detail": f"Instructor marked {sid} as {status}. Reason: {req.reason}",
+    })
+
+    await manager.broadcast({
+        "type": "ATTENDANCE_OVERRIDDEN",
+        "student_id": sid,
+        "attendance_status": status,
+        "reason": req.reason,
+    })
+    await manager.broadcast({"type": "AGGREGATE_METRICS_UPDATED", "metrics": compute_aggregate_metrics()})
+    return {"ok": True, "student_id": sid, "attendance_status": status, "audit_id": audit_id}
+
 @app.post("/api/session/simulate-proxy")
 async def simulate_proxy_attack():
     """
@@ -460,7 +607,7 @@ def cleanup_expired_records(retention_days: Optional[int] = None) -> Dict[str, A
     # 1. Purge expired student records
     expired_student_ids = [
         sid for sid, s in STUDENTS_STORE.items()
-        if s.get("joined_at", 0) < cutoff
+        if s.get("joined_at", 0) and s.get("joined_at", 0) < cutoff
     ]
     for sid in expired_student_ids:
         del STUDENTS_STORE[sid]
