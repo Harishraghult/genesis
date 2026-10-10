@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#0F1222</color>
+    <color name="card">#1A1F38</color>
+    <color name="text">#E8E9F3</color>
+    <color name="muted">#9AA0BF</color>
+    <color name="accent">#7EE0C3</color>
+    <color name="warn">#FFB86B</color>
+    <color name="danger">#FF5C7A</color>
+
+    <style name="FocusTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:textColor">@color/text</item>
+    </style>
+</resources>
