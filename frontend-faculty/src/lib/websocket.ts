@@ -68,3 +68,4 @@ class WebSocketClient {
 }
 
 export const wsClient = new WebSocketClient();
+export const studentWsClient = wsClient;
