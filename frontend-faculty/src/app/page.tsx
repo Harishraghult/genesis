@@ -78,6 +78,24 @@ export default function FacultyDashboard() {
     }
   };
 
+  // Poll session metrics every 4s — primary update mechanism on Vercel (no WebSocket)
+  useEffect(() => {
+    fetchStatus();
+    const poll = setInterval(fetchStatus, 4000);
+    return () => clearInterval(poll);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Auto-refresh roster every 5s when it is unlocked
+  useEffect(() => {
+    if (!isRosterUnlocked) return;
+    const rosterPoll = setInterval(() => {
+      fetchRoster(keyRef.current);
+    }, 5000);
+    return () => clearInterval(rosterPoll);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRosterUnlocked]);
+
   // Fetch Role-Protected Roster
   const fetchRoster = async (key: string) => {
     try {
@@ -106,9 +124,7 @@ export default function FacultyDashboard() {
   };
 
   useEffect(() => {
-    fetchStatus();
-
-    // One stable subscription; reads latest key/unlock state via refs
+    // WebSocket subscription as bonus real-time enhancement (works locally, gracefully fails on Vercel)
     const unsubscribe = wsClient.subscribe((msg: any) => {
       const refreshRoster = () => {
         if (unlockedRef.current) fetchRoster(keyRef.current);
@@ -149,6 +165,7 @@ export default function FacultyDashboard() {
     return () => unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   const handleUnlockSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

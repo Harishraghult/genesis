@@ -19,8 +19,13 @@ export function getWsUrl(): string {
     return `${wsBase}/ws/session`;
   }
   if (typeof window !== "undefined") {
+    // On Vercel (HTTPS), there's no WebSocket server — return empty to skip WS connection
+    if (window.location.hostname.endsWith(".vercel.app") || window.location.protocol === "https:") {
+      return "";
+    }
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     return `${proto}//${window.location.hostname}:8000/ws/session`;
   }
-  return "ws://localhost:8000/ws/session";
+  return "";
 }
+

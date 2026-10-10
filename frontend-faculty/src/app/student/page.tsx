@@ -1,13 +1,13 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import QRScanner from "@/components/QRScanner";
 import FocusAttestation from "@/components/FocusAttestation";
 import CourseViewer from "@/components/CourseViewer";
 import QuizModal from "@/components/QuizModal";
 import { studentWsClient } from "@/lib/websocket";
 import { getApiBase } from "@/lib/config";
-import { Shield, LogOut, CheckCircle2, AlertOctagon, PhoneCall } from "lucide-react";
+import { LogOut, CheckCircle2, PhoneCall, AlertTriangle, X } from "lucide-react";
 
 interface StudentSession {
   student_id: string;
@@ -20,24 +20,34 @@ interface StudentSession {
 
 export default function StudentPage() {
   const [session, setSession] = useState<StudentSession | null>(null);
-  const [pendingConsentSession, setPendingConsentSession] = useState<StudentSession | null>(null);
   const [pulseQuiz, setPulseQuiz] = useState<any | null>(null);
   const [sessionEnded, setSessionEnded] = useState<boolean>(false);
   const [kioskMode, setKioskMode] = useState<boolean>(true);
   const [emergencyNumber, setEmergencyNumber] = useState<string>("112");
+  const [showExitConfirm, setShowExitConfirm] = useState<boolean>(false);
 
-  // Immediate termination handler
-  const triggerSessionTermination = () => {
+  // Refs so the poll interval never captures a stale closure
+  const sessionRef = useRef<StudentSession | null>(null);
+  const sessionEndedRef = useRef<boolean>(false);
+  useEffect(() => { sessionRef.current = session; }, [session]);
+  useEffect(() => { sessionEndedRef.current = sessionEnded; }, [sessionEnded]);
+
+  // Termination — safe to call multiple times (idempotent via ref guard)
+  const triggerSessionTermination = useCallback(() => {
+    if (sessionEndedRef.current) return;
     setSessionEnded(true);
+    sessionEndedRef.current = true;
     if (typeof document !== "undefined" && document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
     }
+    // Auto-return to scan screen after 5 s
     setTimeout(() => {
       setSession(null);
-      setPendingConsentSession(null);
+      sessionRef.current = null;
       setSessionEnded(false);
-    }, 1200);
-  };
+      sessionEndedRef.current = false;
+    }, 5000);
+  }, []);
 
   useEffect(() => {
     // 1. WebSocket notification
@@ -49,18 +59,19 @@ export default function StudentPage() {
       }
     });
 
-    // 2. High-frequency active poll: if instructor ends session, student exits in <= 1.5s
+    // 2. High-frequency active poll: exit in <=2s when instructor stops session.
+    // KEY FIX: read sessionRef.current (ref) — not session (stale closure at effect-mount time)
     const pollInterval = setInterval(() => {
       fetch(`${getApiBase()}/api/session/status`, { cache: "no-store" })
         .then((res) => res.json())
         .then((data) => {
           if (data.emergency_number) setEmergencyNumber(data.emergency_number);
-          if (data.session && !data.session.is_active && session) {
+          if (data.session && !data.session.is_active && sessionRef.current !== null) {
             triggerSessionTermination();
           }
         })
         .catch(() => {});
-    }, 1500);
+    }, 2000);
 
     // 3. BroadcastChannel cross-tab instant notification
     let bc: BroadcastChannel | null = null;
@@ -87,48 +98,38 @@ export default function StudentPage() {
       if (bc) bc.close();
       window.removeEventListener("storage", onStorage);
     };
-  }, [session]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // empty deps — poll reads sessionRef so stale closures are impossible
 
   const handlePunchSuccess = (data: StudentSession) => {
-    // Transition immediately to lecture mode with kiosk containment active!
     setKioskMode(true);
     setSession(data);
-    setPendingConsentSession(null);
-
+    sessionRef.current = data;
     if (typeof document !== "undefined" && document.documentElement.requestFullscreen) {
       document.documentElement.requestFullscreen().catch(() => {});
     }
   };
 
-  const handleConfirmConsent = (enableKiosk: boolean) => {
-    if (!pendingConsentSession) return;
-    setKioskMode(enableKiosk);
-    setSession(pendingConsentSession);
-    setPendingConsentSession(null);
-
-    if (enableKiosk && typeof document !== "undefined" && document.documentElement.requestFullscreen) {
-      document.documentElement.requestFullscreen().catch(() => {});
-    }
+  const handleExit = () => {
+    // Custom overlay — window.confirm() is silently blocked in fullscreen on mobile browsers
+    setShowExitConfirm(true);
   };
 
-  const handleExit = () => {
-    if (confirm("Exit FocusLock Lecture Mode? Your exit will be logged to the faculty board.")) {
-      setSession(null);
-      setPendingConsentSession(null);
-      if (document.fullscreenElement) {
-        document.exitFullscreen().catch(() => {});
-      }
+  const handleConfirmExit = () => {
+    setShowExitConfirm(false);
+    setSession(null);
+    sessionRef.current = null;
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
     }
   };
 
   const handleEmergency = () => {
-    // 1. Tear down session and restrictions locally FIRST without waiting for server response
     setSession(null);
-    setPendingConsentSession(null);
+    sessionRef.current = null;
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
     }
-    // 2. Clear local locks and redirect immediately to regional emergency dialer
     window.location.href = `tel:${emergencyNumber}`;
   };
 
@@ -145,52 +146,15 @@ export default function StudentPage() {
           ← Teacher Dashboard
         </a>
       </div>
-      {pendingConsentSession ? (
-        /* OPT-IN PRE-PROMPT SCREEN (Item 8) */
-        <div className="my-auto bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl flex flex-col gap-4 animate-fade-in">
-          <div className="flex items-center gap-3 pb-3 border-b border-slate-800">
-            <div className="w-10 h-10 rounded-xl bg-cyan-950 border border-cyan-800 flex items-center justify-center text-cyan-400">
-              <Shield className="w-5 h-5" />
-            </div>
-            <div>
-              <h2 className="text-base font-bold text-white">Focus Containment Opt-In</h2>
-              <p className="text-xs text-slate-400">Welcome, {pendingConsentSession.student_name}</p>
-            </div>
-          </div>
 
-          <div className="text-xs text-slate-300 space-y-2.5 leading-relaxed bg-slate-950/80 p-4 rounded-xl border border-slate-800">
-            <div>
-              <span className="font-semibold text-emerald-400 block mb-0.5">What FocusLock Does:</span>
-              <span>Monitors whether this lecture window remains active. Full screen kiosk containment helps you focus on lecture materials.</span>
-            </div>
-            <div>
-              <span className="font-semibold text-cyan-400 block mb-0.5">What FocusLock NEVER Does:</span>
-              <span>Zero traffic sniffing, zero inspection of personal apps, zero logging of external browsing. Traffic is never rerouted.</span>
-            </div>
-            <div className="pt-2 border-t border-slate-800/80 text-[11px] text-slate-400 italic">
-              Privacy guarantee: Foreground presence detection alone provides full class attendance verification.
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-2.5 pt-2">
-            <button
-              onClick={() => handleConfirmConsent(true)}
-              className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-slate-950 text-xs font-bold rounded-xl transition-all shadow-lg flex items-center justify-center gap-2"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              Opt-In to Full Focus Containment (Kiosk Mode)
-            </button>
-
-            <button
-              onClick={() => handleConfirmConsent(false)}
-              className="w-full py-2 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition-colors border border-slate-700"
-            >
-              Foreground Presence Only (No Kiosk Containment)
-            </button>
-          </div>
-        </div>
-      ) : !session ? (
+      {!session ? (
         <div className="my-auto py-6">
+          {sessionEnded && (
+            <div className="mb-4 p-4 bg-cyan-950/90 border border-cyan-700 rounded-xl text-xs text-cyan-200 flex items-center gap-2 shadow-xl">
+              <CheckCircle2 className="w-5 h-5 text-cyan-400 shrink-0" />
+              <span className="font-semibold">Session ended by instructor. Returning to check-in…</span>
+            </div>
+          )}
           <QRScanner onSuccess={handlePunchSuccess} />
         </div>
       ) : (
@@ -230,20 +194,21 @@ export default function StudentPage() {
 
           {/* Session Ended Notification */}
           {sessionEnded && (
-            <div className="p-4 bg-cyan-950/90 border border-cyan-700 rounded-xl text-xs text-cyan-200 flex flex-col gap-2.5 shadow-xl animate-fade-in">
+            <div className="p-4 bg-cyan-950/90 border border-cyan-700 rounded-xl text-xs text-cyan-200 flex flex-col gap-2.5 shadow-xl">
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="w-5 h-5 text-cyan-400 shrink-0" />
-                <span className="font-semibold">Instructor stopped the session. Releasing locks and returning to Idle screen...</span>
+                <span className="font-semibold">Instructor stopped the session. Releasing locks and returning to Idle screen…</span>
               </div>
               <button
                 onClick={() => {
                   setSession(null);
-                  setPendingConsentSession(null);
+                  sessionRef.current = null;
                   setSessionEnded(false);
+                  sessionEndedRef.current = false;
                 }}
                 className="w-full py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-lg text-xs transition-colors"
               >
-                Return to Check-In Screen
+                Return to Check-In Screen Now
               </button>
             </div>
           )}
@@ -272,6 +237,35 @@ export default function StudentPage() {
       <footer className="text-center py-3 text-[11px] text-slate-500">
         FocusLock Zero-Trust Academic Intranet · Session-Scoped Kiosk
       </footer>
+
+      {/* Custom Exit Confirmation Overlay — replaces window.confirm() which is blocked in fullscreen */}
+      {showExitConfirm && (
+        <div className="fixed inset-0 z-[200] bg-black/90 backdrop-blur-sm flex items-center justify-center p-6">
+          <div className="bg-slate-900 border-2 border-amber-600 rounded-2xl p-6 max-w-sm w-full shadow-2xl text-center">
+            <div className="w-14 h-14 bg-amber-500/10 border border-amber-500/30 rounded-full flex items-center justify-center mx-auto mb-3 text-amber-400">
+              <AlertTriangle className="w-8 h-8" />
+            </div>
+            <h2 className="text-lg font-extrabold text-white">Exit Lecture Mode?</h2>
+            <p className="text-xs text-amber-200/90 mt-2 leading-relaxed">
+              Your early exit will be recorded on the faculty attendance board. Your attendance may be marked as <strong>Left in Middle</strong>.
+            </p>
+            <div className="flex flex-col gap-2 mt-5">
+              <button
+                onClick={handleConfirmExit}
+                className="w-full py-3 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-sm transition-colors"
+              >
+                Exit &amp; Record My Departure
+              </button>
+              <button
+                onClick={() => setShowExitConfirm(false)}
+                className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl text-sm border border-slate-700 flex items-center justify-center gap-2 transition-colors"
+              >
+                <X className="w-4 h-4" /> Stay in Lecture
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

@@ -135,9 +135,11 @@ export default function FocusAttestation({
     playAlertBeep();
     triggerVibrate([200, 100, 200]);
     report("EVENT_FOCUS_RESTORED", "Returned to lecture");
-    if (kiosk) setShowReturnOverlay(true);
+    // DO NOT re-show the overlay on return — it is already showing from when focus was lost.
+    // The student must tap "Re-Engage Lecture Lock" to dismiss and re-enter fullscreen.
     requestWakeLock();
-  }, [kiosk, onFocusStatusChange, report, requestWakeLock]);
+  }, [onFocusStatusChange, report, requestWakeLock]);
+
 
   // 1. Single-instance lock: FocusLock may only be open in ONE tab
   useEffect(() => {

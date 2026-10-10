@@ -18,6 +18,10 @@ export async function POST(req: NextRequest) {
         student.leave_count = (student.leave_count || 0) + 1;
       } else if (eventType === "EVENT_FOCUS_RESTORED") {
         student.is_focused = true;
+        // Restore back to present — the leave_count already records the violation
+        if (student.attendance_status === "LEFT_MIDDLE") {
+          student.attendance_status = "VERIFIED_PRESENT";
+        }
       }
     }
 

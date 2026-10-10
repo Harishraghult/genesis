@@ -115,10 +115,9 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
         localStorage.setItem(LS_NAME, name);
       } catch {}
 
-      // Fast network attempt with a 2-second timeout so student mobile never hangs
-      let serverVerified = false;
+      // Network attempt with a 5-second timeout (increased from 2s for Vercel cold start)
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
 
       try {
         const res = await fetch(`${getApiBase()}/api/attendance/punch-in`, {
@@ -135,7 +134,8 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
         clearTimeout(timeoutId);
         const data = await res.json();
         if (res.ok && data.status !== "ERROR") {
-          serverVerified = true;
+          submittingRef.current = false;
+          setLoading(false);
           onSuccess({
             student_id: data.student_id || id,
             student_name: data.student_name || name,
@@ -145,17 +145,50 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
             status: data.status || "FOCUSED",
           });
           return;
+        } else if (!res.ok) {
+          // Server explicitly rejected (e.g. session not active or bad token)
+          clearTimeout(timeoutId);
+          setErrorMsg(data?.message || "Check-in rejected. Is the session active?");
+          submittingRef.current = false;
+          setLoading(false);
+          scanHandledRef.current = false;
+          return;
         }
       } catch (err: any) {
         clearTimeout(timeoutId);
-        // Network timeout or backend offline — proceed immediately to high-availability verification!
+        // Network timeout — fall through to local TOTP validation
       }
 
-      // High-availability fallback: automatically accept enrolled student
+      // High-availability fallback: validate token locally before accepting
+      // Use the SAME FNV hash the server uses so the code must be genuinely correct
+      function localTotp(stepSeconds: number = 15): string {
+        const now = Math.floor(Date.now() / 1000);
+        const epochWindow = Math.floor(now / stepSeconds);
+        let h = 0x811c9dc5;
+        const s = `fl_salt_2026_${epochWindow}`;
+        for (let i = 0; i < s.length; i++) {
+          h ^= s.charCodeAt(i);
+          h = Math.imul(h, 0x01000193);
+        }
+        return String(Math.abs(h) % 1000000).padStart(6, "0");
+      }
+
+      const expectedToken = localTotp(15);
+      if (token !== expectedToken) {
+        setErrorMsg("Invalid or expired code. Please scan the latest QR code from the projector.");
+        submittingRef.current = false;
+        setLoading(false);
+        scanHandledRef.current = false;
+        return;
+      }
+
+      // Token locally validated — allow enrolled student in HA mode
       const match = ENROLLED_STUDENTS.find(
         (s) => s.id.toUpperCase() === id.toUpperCase() || s.name.toLowerCase() === name.toLowerCase()
       );
 
+      submittingRef.current = false;
+      setLoading(false);
       onSuccess({
         student_id: match ? match.id : id,
         student_name: match ? match.name : name,
@@ -164,10 +197,6 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
         session_secret: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
         status: "FOCUSED",
       });
-
-      submittingRef.current = false;
-      setLoading(false);
-      scanHandledRef.current = false;
     },
     [studentId, studentName, onSuccess]
   );

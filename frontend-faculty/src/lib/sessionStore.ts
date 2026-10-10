@@ -67,6 +67,18 @@ export function resetRoster() {
   for (const s of MOCK_ENROLLED_STUDENTS) {
     STUDENTS_MAP.set(s.student_id, { ...s });
   }
+  // Also clear audit logs on session reset
+  AUDIT_LOGS.length = 0;
+}
+
+export function safeResetRoster() {
+  // Only reset if no students have checked in yet (idempotent for already-active sessions)
+  const anyCheckedIn = Array.from(STUDENTS_MAP.values()).some(
+    (s) => s.attendance_status !== "ABSENT"
+  );
+  if (!anyCheckedIn) {
+    resetRoster();
+  }
 }
 
 export function computeMetrics() {
