@@ -2,6 +2,7 @@ package edu.focuslock
 
 import android.app.Activity
 import android.app.ActivityManager
+import android.app.NotificationManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
@@ -10,6 +11,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
+import android.view.WindowManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -72,6 +74,12 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Hardened Anti-Tamper Layer: FLAG_SECURE blocks external screen-capture,
+        // mirroring malware, and blanks the Recent Apps task switcher preview.
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_SECURE,
+            WindowManager.LayoutParams.FLAG_SECURE
+        )
         setContentView(R.layout.activity_main)
 
         field(R.id.inServer).setText(prefs.getString("server", ""))
@@ -245,6 +253,7 @@ class MainActivity : Activity() {
         setupWebView()
         web.loadUrl("${api!!.base}/portal/")
         try { startLockTask() } catch (_: Exception) { /* pinning refused; reported as unpinned */ }
+        enableDndMode()
         startHeartbeat()
     }
 
@@ -391,6 +400,7 @@ class MainActivity : Activity() {
         stopHeartbeat()
         FocusVpnService.stop() // normal connectivity returns as soon as the tun is closed
         runCatching { stopLockTask() }
+        disableDndMode()
         api?.creds = null
         api = null
         vpnState = "off"
@@ -400,6 +410,24 @@ class MainActivity : Activity() {
         show(Mode.CHECKIN)
         field(R.id.inCode).setText("")
         txtCheckinStatus.text = "$message Normal internet is restored."
+    }
+
+    private fun enableDndMode() {
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            if (nm != null && nm.isNotificationPolicyAccessGranted) {
+                nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun disableDndMode() {
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            if (nm != null && nm.isNotificationPolicyAccessGranted) {
+                nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
+            }
+        } catch (_: Exception) {}
     }
 
     // ------------------------------------------------------------------ helpers

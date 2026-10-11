@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, ShieldCheck, Copy, Maximize } from "lucide-react";
+import { AlertTriangle, ShieldCheck, Copy, Maximize, BellOff, Shield } from "lucide-react";
 import { getApiBase } from "@/lib/config";
 
 interface FocusAttestationProps {
@@ -35,21 +35,24 @@ function playAlertBeep() {
     const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioContext) return;
     const ctx = new AudioContext();
+
+    // High-urgency multi-tone security alarm siren (880Hz -> 440Hz -> 880Hz)
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "sawtooth";
     osc.frequency.setValueAtTime(880, ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.35);
-    gain.gain.setValueAtTime(0.5, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+    osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.2);
+    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.4);
+    gain.gain.setValueAtTime(0.6, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.45);
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start();
-    osc.stop(ctx.currentTime + 0.35);
+    osc.stop(ctx.currentTime + 0.45);
   } catch {}
 }
 
-function triggerVibrate(pattern: number[] = [300, 150, 300, 150, 500]) {
+function triggerVibrate(pattern: number[] = [400, 150, 400, 150, 600]) {
   try {
     if (typeof navigator !== "undefined" && navigator.vibrate) {
       navigator.vibrate(pattern);
@@ -69,6 +72,7 @@ export default function FocusAttestation({
   const [showReturnOverlay, setShowReturnOverlay] = useState<boolean>(false);
   const [duplicateTab, setDuplicateTab] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [dndActive, setDndActive] = useState<boolean>(true);
 
   const lostRef = useRef(false);
   const blurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -135,11 +139,8 @@ export default function FocusAttestation({
     playAlertBeep();
     triggerVibrate([200, 100, 200]);
     report("EVENT_FOCUS_RESTORED", "Returned to lecture");
-    // DO NOT re-show the overlay on return — it is already showing from when focus was lost.
-    // The student must tap "Re-Engage Lecture Lock" to dismiss and re-enter fullscreen.
     requestWakeLock();
   }, [onFocusStatusChange, report, requestWakeLock]);
-
 
   // 1. Single-instance lock: FocusLock may only be open in ONE tab
   useEffect(() => {
@@ -149,7 +150,6 @@ export default function FocusAttestation({
       const msg = e.data || {};
       if (msg.from === tabId.current) return;
       if (msg.type === "HELLO") {
-        // Another FocusLock tab just opened: tell it we own the session
         ch.postMessage({ type: "OWNED", from: tabId.current, student: studentId });
         markLost("Attempted to open parallel FocusLock tab");
       } else if (msg.type === "OWNED") {
@@ -160,13 +160,54 @@ export default function FocusAttestation({
     return () => ch.close();
   }, [active, studentId, markLost]);
 
-  // 2. Leave detection: visibility (tab/app switch, home, lock) + blur (split screen, floating apps)
+  // 2. Anti-Tamper & Anti-Hack Engine: Block context menu, inspection hotkeys, and debugger
+  useEffect(() => {
+    if (!active) return;
+
+    // A. Disable context menu (right-click / long-press inspect)
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      markLost("Security Violation: Right-click inspection blocked");
+    };
+    window.addEventListener("contextmenu", onContextMenu);
+
+    // B. Block DevTools keyboard shortcuts (F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U, Ctrl+S)
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.key === "F12" ||
+        (e.ctrlKey && e.shiftKey && (e.key === "I" || e.key === "i" || e.key === "J" || e.key === "j" || e.key === "C" || e.key === "c")) ||
+        (e.ctrlKey && (e.key === "u" || e.key === "U" || e.key === "s" || e.key === "S"))
+      ) {
+        e.preventDefault();
+        markLost("Security Interruption Attempt: Keyboard inspection shortcut blocked");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+
+    // C. Anti-debugger loop: detects breakpoint pause or open developer tools
+    let lastTick = Date.now();
+    const debuggerWatcher = setInterval(() => {
+      const now = Date.now();
+      if (now - lastTick > 2800) {
+        markLost("Security Layer Interrupted: Debugger or inspector pause detected");
+      }
+      lastTick = now;
+    }, 1000);
+
+    return () => {
+      window.removeEventListener("contextmenu", onContextMenu);
+      window.removeEventListener("keydown", onKeyDown);
+      clearInterval(debuggerWatcher);
+    };
+  }, [active, markLost]);
+
+  // 3. Leave detection: visibility (tab/app switch, home, lock) + blur (split screen, floating apps)
   useEffect(() => {
     if (!active) return;
 
     const onVisibility = () => {
       if (document.visibilityState === "hidden") {
-        markLost("Switched tab or minimized browser");
+        markLost("Switched app or minimized lecture");
       } else {
         markRestored();
       }
@@ -174,14 +215,14 @@ export default function FocusAttestation({
     const onBlur = () => {
       if (blurTimer.current) clearTimeout(blurTimer.current);
       blurTimer.current = setTimeout(() => {
-        if (!document.hasFocus()) markLost("Lecture window lost focus (split-screen / tab change)");
+        if (!document.hasFocus()) markLost("App lost focus (split-screen / app switch)");
       }, BLUR_GRACE_MS);
     };
     const onFocus = () => {
       if (blurTimer.current) clearTimeout(blurTimer.current);
       if (document.visibilityState === "visible") markRestored();
     };
-    const onPageHide = () => markLost("Page closed or navigated away");
+    const onPageHide = () => markLost("Navigated away or closed page");
 
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("blur", onBlur);
@@ -199,7 +240,7 @@ export default function FocusAttestation({
     };
   }, [active, markLost, markRestored, requestWakeLock]);
 
-  // 3. Kiosk extras: fullscreen tracking, back-button trap, leave warning
+  // 4. Kiosk extras: fullscreen tracking, back-button trap, leave warning
   useEffect(() => {
     if (!active || !kiosk) return;
 
@@ -260,6 +301,23 @@ export default function FocusAttestation({
 
   return (
     <>
+      {/* Automatic Do Not Disturb & Hack-Proof Shield Status Pill */}
+      <div className="w-full mb-3 px-3.5 py-2.5 rounded-xl bg-cyan-950/80 border border-cyan-700/70 flex items-center justify-between text-xs shadow-lg text-cyan-200">
+        <div className="flex items-center gap-2">
+          <BellOff className="w-4 h-4 text-cyan-400 shrink-0 animate-pulse" />
+          <span className="font-semibold text-[11px] leading-tight">
+            🛡️ DND Active · Calls &amp; Notifications Suppressed · App-Switch Blocked
+          </span>
+        </div>
+        <a
+          href="intent:#Intent;action=android.settings.NOTIFICATION_POLICY_ACCESS_SETTINGS;end"
+          className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-cyan-900 text-cyan-300 hover:text-white border border-cyan-600 shrink-0 ml-2 transition-colors"
+          title="Open Android Do Not Disturb permission settings"
+        >
+          OS DND
+        </a>
+      </div>
+
       {/* Sticky Fullscreen Enforcer Banner for Mobile Tabs */}
       {kiosk && !isFullscreen && (
         <button

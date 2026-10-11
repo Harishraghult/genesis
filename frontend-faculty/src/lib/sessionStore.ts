@@ -22,6 +22,17 @@ export const MOCK_ENROLLED_STUDENTS: StudentRecord[] = [
   { student_id: "21CS033", student_name: "Zara Patel", seat: "Row 3, #14", attendance_status: "ABSENT", is_focused: true, leave_count: 0, joined_at: 0, last_seen: 0 },
 ];
 
+export interface FocusAlertItem {
+  id: string;
+  student_id: string;
+  student_name: string;
+  seat: string;
+  leave_count: number;
+  timestamp: number;
+  detail: string;
+  type: "APP_SWITCH" | "TAB_SWITCH" | "TAMPER_DETECTED" | "SPLIT_SCREEN";
+}
+
 // Persistent global store across Vercel warm lambdas
 const globalForSession = globalThis as unknown as {
   fl_session?: {
@@ -35,6 +46,7 @@ const globalForSession = globalThis as unknown as {
   };
   fl_students?: Map<string, StudentRecord>;
   fl_audit?: Array<any>;
+  fl_focus_alerts?: FocusAlertItem[];
 };
 
 import fs from "fs";
@@ -61,6 +73,9 @@ globalForSession.fl_students = STUDENTS_MAP;
 export const AUDIT_LOGS = globalForSession.fl_audit ?? [];
 globalForSession.fl_audit = AUDIT_LOGS;
 
+export const FOCUS_ALERTS: FocusAlertItem[] = globalForSession.fl_focus_alerts ?? [];
+globalForSession.fl_focus_alerts = FOCUS_ALERTS;
+
 // Try to hydrate from disk if file exists
 syncFromDisk();
 
@@ -71,11 +86,25 @@ if (STUDENTS_MAP.size === 0) {
   }
 }
 
+export function recordFocusAlert(alert: Omit<FocusAlertItem, "id">): FocusAlertItem {
+  const item: FocusAlertItem = {
+    ...alert,
+    id: "fa_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+  };
+  FOCUS_ALERTS.push(item);
+  if (FOCUS_ALERTS.length > 50) {
+    FOCUS_ALERTS.splice(0, FOCUS_ALERTS.length - 50);
+  }
+  syncToDisk();
+  return item;
+}
+
 export function syncToDisk() {
   try {
     const data = {
       session: SESSION_STATE,
       students: Array.from(STUDENTS_MAP.entries()),
+      focus_alerts: FOCUS_ALERTS.slice(-20),
       savedAt: Date.now(),
     };
     fs.writeFileSync(STATE_FILE, JSON.stringify(data), "utf8");
@@ -95,6 +124,9 @@ export function syncFromDisk() {
           STUDENTS_MAP.set(id, rec);
         }
       }
+      if (Array.isArray(parsed.focus_alerts) && FOCUS_ALERTS.length === 0) {
+        FOCUS_ALERTS.push(...parsed.focus_alerts);
+      }
     }
   } catch {}
 }
@@ -105,6 +137,7 @@ export function resetRoster() {
     STUDENTS_MAP.set(s.student_id, { ...s });
   }
   AUDIT_LOGS.length = 0;
+  FOCUS_ALERTS.length = 0;
   syncToDisk();
 }
 

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { SESSION_STATE, computeMetrics, syncFromDisk } from "@/lib/sessionStore";
+import { SESSION_STATE, computeMetrics, syncFromDisk, FOCUS_ALERTS } from "@/lib/sessionStore";
 
 export const dynamic = "force-dynamic";
 
@@ -20,5 +20,6 @@ export async function GET() {
     summary,
     metrics: summary,
     emergency_number: "112",
+    recent_focus_alerts: FOCUS_ALERTS.slice(-10),
   });
 }

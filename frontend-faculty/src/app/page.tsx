@@ -24,6 +24,9 @@ import {
   AlertCircle,
   Loader2,
   Play,
+  Volume2,
+  VolumeX,
+  Smartphone,
 } from "lucide-react";
 
 interface AggregateMetrics {
@@ -57,14 +60,49 @@ export default function FacultyDashboard() {
   const [sessionActive, setSessionActive] = useState<boolean>(false);
   const [starting, setStarting] = useState<boolean>(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
 
-  // Refs so the single WebSocket subscription always sees current values
+  // Refs so the single WebSocket subscription & poll always see current values
   const keyRef = useRef(instructorKeyInput);
   const unlockedRef = useRef(isRosterUnlocked);
+  const soundEnabledRef = useRef(soundEnabled);
+  const seenAlertIdsRef = useRef<Set<string>>(new Set());
+
   useEffect(() => { keyRef.current = instructorKeyInput; }, [instructorKeyInput]);
   useEffect(() => { unlockedRef.current = isRosterUnlocked; }, [isRosterUnlocked]);
+  useEffect(() => { soundEnabledRef.current = soundEnabled; }, [soundEnabled]);
 
-  // Fetch initial public session status (Aggregates Only - FERPA Compliant)
+  // Dual-tone high-contrast alert chime synthesized through Web Audio API
+  const playFacultyAlertChime = () => {
+    try {
+      if (typeof window === "undefined" || !soundEnabledRef.current) return;
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+
+      // High urgency 2-tone alarm chime: 880Hz -> 659Hz -> 880Hz
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.setValueAtTime(659.25, ctx.currentTime + 0.12);
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.24);
+
+      gain.gain.setValueAtTime(0.4, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.42);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.42);
+    } catch {}
+  };
+
+  const handleDismissAlert = (id: string) => {
+    setAlerts((prev) => prev.filter((a) => a.id !== id));
+  };
+
+  // Fetch initial public session status & real-time focus violation alerts
   const fetchStatus = async () => {
     try {
       const res = await fetch(`${getApiBase()}/api/session/status`);
@@ -74,6 +112,38 @@ export default function FacultyDashboard() {
           setMetrics(data.metrics);
         }
         setSessionActive(data.session?.is_active ?? false);
+
+        // Process real-time student app-switch / focus violation alerts
+        if (Array.isArray(data.recent_focus_alerts)) {
+          let hasNewViolation = false;
+          for (const fa of data.recent_focus_alerts) {
+            if (!seenAlertIdsRef.current.has(fa.id)) {
+              seenAlertIdsRef.current.add(fa.id);
+              hasNewViolation = true;
+              const newAlert: AnomalyEvent = {
+                id: fa.id,
+                student_id: fa.student_id,
+                student_name: fa.student_name,
+                timestamp: fa.timestamp,
+                message: fa.detail || "App switch or focus lost violation",
+                title: fa.type === "TAMPER_DETECTED"
+                  ? "Security Tamper Attempt"
+                  : fa.type === "SPLIT_SCREEN"
+                  ? "Split-Screen Focus Lost"
+                  : "App Switch Violation",
+                type: fa.type === "TAMPER_DETECTED" ? "TAMPER_DETECTED" : "APP_SWITCH",
+                leave_count: fa.leave_count,
+              };
+              setAlerts((prev) => [newAlert, ...prev.slice(0, 4)]);
+            }
+          }
+          if (hasNewViolation) {
+            playFacultyAlertChime();
+            if (unlockedRef.current) {
+              fetchRoster(keyRef.current);
+            }
+          }
+        }
       }
     } catch (e) {
       console.error("Failed to load initial session status:", e);
@@ -349,6 +419,37 @@ export default function FacultyDashboard() {
           >
             📱 Open Student Mobile App →
           </a>
+
+          {/* Real-time Alert Chime Toggle */}
+          <button
+            onClick={() => {
+              setSoundEnabled((prev) => {
+                const nextVal = !prev;
+                if (nextVal) {
+                  setTimeout(() => playFacultyAlertChime(), 50);
+                }
+                return nextVal;
+              });
+            }}
+            title={soundEnabled ? "Violations audio alarm is ON (click to mute)" : "Violations audio alarm is MUTED (click to enable)"}
+            className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition-all shrink-0 ${
+              soundEnabled
+                ? "bg-amber-950/70 border-amber-600 text-amber-300 shadow-lg shadow-amber-900/20"
+                : "bg-slate-800/80 border-slate-700 text-slate-400"
+            }`}
+          >
+            {soundEnabled ? (
+              <>
+                <Volume2 className="w-4 h-4 text-amber-400 animate-pulse" />
+                <span>Chime ON</span>
+              </>
+            ) : (
+              <>
+                <VolumeX className="w-4 h-4 text-slate-400" />
+                <span>Chime OFF</span>
+              </>
+            )}
+          </button>
           <div className="bg-slate-950/90 border border-slate-800 px-4 py-2 rounded-xl text-center min-w-[100px]">
             <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
               Checked In
@@ -593,7 +694,7 @@ export default function FacultyDashboard() {
       )}
 
       {/* Floating Anomaly Alerts Toast Stack */}
-      <AnomalyAlerts alerts={alerts} onDismiss={() => {}} />
+      <AnomalyAlerts alerts={alerts} onDismiss={handleDismissAlert} />
     </main>
   );
 }
