@@ -146,7 +146,12 @@ function SessionView({ auth, sessionId, onBack, onExpired }: { auth: Auth; sessi
       const result = await checkIn(auth.user.id, token, qr);
       setNotice(result.duplicate ? 'You were already checked in.' : 'Checked in. Your attendance is recorded as present.');
       await refresh();
-    } catch (e) { setNotice(''); setError((e as Error).message); } finally { setBusy(false); }
+    } catch (e) {
+      setNotice('');
+      const message = (e as Error).message;
+      // Face checks run only in the Android app; the web app never claims a face match, so it cannot skip the check.
+      setError(/face/i.test(message) ? 'This class needs the face check, which runs in the FocusLock Android app. Check in with the app, or tap “Can’t scan? Ask teacher” to have your teacher confirm you.' : message);
+    } finally { setBusy(false); }
   }
   async function requestReview(event: React.FormEvent) {
     event.preventDefault(); setBusy(true); setError('');

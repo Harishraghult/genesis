@@ -10,8 +10,12 @@ services:
     autoDeploy: true
     envVars:
       # Throwaway SQLite demo database, rebuilt and reseeded whenever the service starts or wakes from sleep.
+      # Ignored when DATABASE_URL is set. Recorded faces need DATABASE_URL, or they vanish on every restart.
       - key: MOCK_DATA
         value: "true"
+      # Optional: managed PostgreSQL (for example Neon). Set it in the Render dashboard; the container migrates and seeds it.
+      - key: DATABASE_URL
+        sync: false
       - key: APP_ENV
         value: development
       - key: ENABLE_DEV_AUTH
@@ -27,7 +31,11 @@ services:
         generateValue: true
       - key: RESOURCE_ALLOWED_HOSTS
         value: college.example.edu
+      # Face check after the QR scan (Android app): "enrolled" = students whose face staff recorded; "required" = everyone.
       - key: FACE_CHECK_MODE
-        value: "off"
+        value: enrolled
+      # Encrypts stored face templates (AES-GCM). No photos are stored.
+      - key: FACE_TEMPLATE_KEY
+        generateValue: true
       - key: PLAY_INTEGRITY_MODE
         value: "off"

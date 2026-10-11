@@ -18,7 +18,7 @@ These controls reduce risk. They do not make FocusLock hack-proof, and a QR chec
 | Monotonic Android session expiry | `FocusDeadline.kt` uses elapsed realtime and boot count | `FocusDeadlineTest.kt` | |
 | Restricted course-resource hosts and redirects | Server allowlist `RESOURCE_ALLOWED_HOSTS`; Android follows no redirects outside it; web links only `https://` | Stage 3 tests, E2E (non-allowlisted host rejected) | Web links open in the phone's browser |
 | App-private offline caching | Android caches only resources marked downloadable, in app-private storage | Android code path | |
-| Encrypted face embeddings | AES-GCM with a random nonce, bound to the student id (`face.py`); no photos stored | `tests/test_face.py` | Face checks are **off by default** (`FACE_CHECK_MODE=off`) |
+| Encrypted face embeddings | AES-GCM with a random nonce, bound to the student id (`face.py`); no photos stored | `tests/test_face.py` | Off by default in the code; the Render demo enables `enrolled`. The match runs on the phone and the server receives a yes/no claim, so it is evidence, not proof |
 | Face-template download disabled in production | `GET /face/templates/me` returns the decrypted template only in the development demo or with `FACE_TEMPLATE_DOWNLOAD=true` | `test_decrypted_templates_are_withheld_in_production_by_default` | Without the template the app sends the student to teacher review |
 | Android `FLAG_SECURE` | `MainActivity.onCreate` | Release compile | Blocks screenshots and recents previews of the app |
 | Dashboard browser protections | CSP, `X-Frame-Options: DENY`, `Permissions-Policy` (camera only for this site), `Referrer-Policy`, `nosniff` | Live response headers | |

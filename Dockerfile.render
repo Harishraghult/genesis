@@ -17,4 +17,5 @@ RUN useradd --create-home appuser
 USER appuser
 EXPOSE 10000
 # One worker: MOCK_DATA keeps its demo database in this process's temp dir.
-CMD ["sh", "-c", "exec uvicorn render_app:app --host 0.0.0.0 --port ${PORT:-10000} --proxy-headers --forwarded-allow-ips='*' --no-access-log"]
+# With DATABASE_URL (e.g. Neon) the schema is migrated and the demo accounts are seeded once; otherwise MOCK_DATA applies.
+CMD ["sh", "-c", "if [ -n \"$DATABASE_URL\" ]; then alembic upgrade head && python -m app.seed; fi && exec uvicorn render_app:app --host 0.0.0.0 --port ${PORT:-10000} --proxy-headers --forwarded-allow-ips='*' --no-access-log"]

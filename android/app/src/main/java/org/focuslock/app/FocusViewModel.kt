@@ -119,7 +119,14 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         val waiting = mutable.value.faceQr ?: return
         faceVerifiedAt[faceKey(studentId, id)] = SystemClock.elapsedRealtime()
         mutable.value = mutable.value.copy(faceQr = null)
-        run { checkInInternal(id, waiting.qr, true) }
+        run {
+            try { checkInInternal(id, waiting.qr, true) }
+            catch (expired: ApiException) {
+                // The class QR rotates every 20 s; a slow face check can outlive it. The match stays valid for 2 minutes.
+                if (expired.statusCode != 410) throw expired
+                mutable.value = mutable.value.copy(checkInResult = "Face verified. The class QR changed while you were checking; scan it once more to finish. No face check is needed for the next 2 minutes.")
+            }
+        }
     }
     fun faceGaveUp(id: Int, message: String) {
         mutable.value = mutable.value.copy(faceQr = null)
