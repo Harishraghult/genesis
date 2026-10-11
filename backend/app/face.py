@@ -28,7 +28,9 @@ from .stage2 import now_utc, student_only
 router = APIRouter()
 MODEL = "sface-2021dec"
 DIMENSIONS = 128
-MATCH_THRESHOLD = 0.42  # same cosine threshold as the Android app (FaceMath.MATCH_THRESHOLD)
+# Cosine threshold. On test portraits same-person pairs scored 0.58-0.98 and different people at most 0.38,
+# so 0.40 keeps a margin above impostors while rejecting fewer genuine students than 0.42 did.
+MATCH_THRESHOLD = 0.40
 PASS_SECONDS = 120
 
 

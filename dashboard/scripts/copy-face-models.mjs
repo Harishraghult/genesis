@@ -1,5 +1,5 @@
 // Puts the face-check models where the site serves them (public/models, not committed):
-// - face-api detector and 68-point landmarks (from the npm package),
+// - face-api SSD face detector and 68-point landmarks (from the npm package),
 // - onnxruntime-web WebAssembly files,
 // - the SFace recognition model, the same file the Android app bundles (copied, or downloaded and SHA-256 checked).
 import { createHash } from 'node:crypto';
@@ -16,7 +16,7 @@ function copy(from, to) { mkdirSync(dirname(to), { recursive: true }); copyFileS
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
 const faceapi = join(root, 'node_modules', '@vladmandic', 'face-api', 'model');
-for (const name of ['tiny_face_detector_model-weights_manifest.json', 'tiny_face_detector_model.bin',
+for (const name of ['ssd_mobilenetv1_model-weights_manifest.json', 'ssd_mobilenetv1_model.bin',
   'face_landmark_68_model-weights_manifest.json', 'face_landmark_68_model.bin']) copy(join(faceapi, name), join(out, 'faceapi', name));
 
 const ort = join(root, 'node_modules', 'onnxruntime-web', 'dist');

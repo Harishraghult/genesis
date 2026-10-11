@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 
 /** Front-camera face capture dialog. Calls onTemplate once with 128 numbers; the camera picture is never stored or sent. */
-export function FaceCamera({ title, intro, blink, frames, onTemplate, onCancel, extra }: {
-  title: string; intro: string; blink: boolean; frames: number;
+export function FaceCamera({ title, intro, blink, frames, spacingMs, onTemplate, onCancel, extra }: {
+  title: string; intro: string; blink: boolean; frames: number; spacingMs?: number;
   onTemplate: (template: number[]) => void; onCancel: () => void; extra?: React.ReactNode;
 }) {
   const video = useRef<HTMLVideoElement>(null);
@@ -20,7 +20,7 @@ export function FaceCamera({ title, intro, blink, frames, onTemplate, onCancel, 
         if (controller.signal.aborted) return;
         if (video.current) { video.current.srcObject = stream; await video.current.play(); }
         const { captureTemplate } = await import('./face');
-        const template = await captureTemplate(video.current!, { blink, frames, onStatus: setStatus, signal: controller.signal });
+        const template = await captureTemplate(video.current!, { blink, frames, spacingMs, onStatus: setStatus, signal: controller.signal });
         if (!controller.signal.aborted) onTemplate(template);
       } catch (e) {
         if ((e as Error).name === 'AbortError') return;

@@ -109,8 +109,8 @@ function FaceRecords({ auth, onExpired }: { auth: Auth; onExpired: () => void })
       <label className="check-label"><input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)}/> {consentFor.name} agreed to have their face recorded</label>
       <div className="actions"><button disabled={!agreed} onClick={() => { setRecording(consentFor); setConsentFor(null); }}>Start camera</button><button className="secondary" onClick={() => setConsentFor(null)}>Cancel</button></div>
     </div></div>}
-    {recording && <FaceCamera title={`Recording ${recording.name}`} blink frames={5}
-      intro="Ask the student to look at the camera, blink once, then hold still."
+    {recording && <FaceCamera title={`Recording ${recording.name}`} blink frames={7} spacingMs={300}
+      intro="Good, even light on the face. Ask the student to look straight at the camera, blink once, then hold still for a few seconds."
       onTemplate={template => void save(recording, template)} onCancel={() => setRecording(null)}/>}
   </section>;
 }

@@ -22,7 +22,7 @@ export function loadFaceEngine(): Promise<Engine> {
     const tf = faceapi.tf as unknown as { setBackend(name: string): Promise<boolean>; ready(): Promise<void> };
     try { if (!(await tf.setBackend('webgl'))) await tf.setBackend('cpu'); } catch { await tf.setBackend('cpu'); }
     await tf.ready();
-    await Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri('/models/faceapi'), faceapi.nets.faceLandmark68Net.loadFromUri('/models/faceapi')]);
+    await Promise.all([faceapi.nets.ssdMobilenetv1.loadFromUri('/models/faceapi'), faceapi.nets.faceLandmark68Net.loadFromUri('/models/faceapi')]);
     ort.env.wasm.wasmPaths = '/models/ort/';
     ort.env.wasm.numThreads = 1;
     ort.env.logLevel = 'error';
@@ -36,11 +36,11 @@ export function loadFaceEngine(): Promise<Engine> {
 const mean = (points: Point[]): Point => ({ x: points.reduce((s, p) => s + p.x, 0) / points.length, y: points.reduce((s, p) => s + p.y, 0) / points.length });
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 
-/** Eye centres, nose base and mouth corners, each pair ordered by image x (FaceMath.orderLandmarks). */
+/** Eye centres, nose tip and mouth corners, each pair ordered by image x (the SFace/ArcFace alignment points). */
 function fivePoints(p: Point[]): number[] {
   const eyes = [mean(p.slice(36, 42)), mean(p.slice(42, 48))].sort((a, b) => a.x - b.x);
   const mouth = [p[48], p[54]].sort((a, b) => a.x - b.x);
-  return [eyes[0].x, eyes[0].y, eyes[1].x, eyes[1].y, p[33].x, p[33].y, mouth[0].x, mouth[0].y, mouth[1].x, mouth[1].y];
+  return [eyes[0].x, eyes[0].y, eyes[1].x, eyes[1].y, p[30].x, p[30].y, mouth[0].x, mouth[0].y, mouth[1].x, mouth[1].y];
 }
 
 /** Least-squares similarity transform src -> dst: x' = a*x - b*y + tx, y' = b*x + a*y + ty (FaceMath.similarity). */
@@ -76,11 +76,18 @@ function eyeOpenness(p: Point[]): number {
 }
 
 async function embed(e: Engine, source: CanvasImageSource, points: number[]): Promise<number[]> {
+  // Averaging the face and its mirror image makes the template steadier (measured gain on test portraits).
+  const [plain, mirrored] = [await embedOnce(e, source, points, false), await embedOnce(e, source, points, true)];
+  return normalize(plain.map((v, i) => v + mirrored[i]));
+}
+
+async function embedOnce(e: Engine, source: CanvasImageSource, points: number[], flip: boolean): Promise<number[]> {
   const [a, b, tx, ty] = similarity(points, TEMPLATE);
   const canvas = document.createElement('canvas');
   canvas.width = SIZE; canvas.height = SIZE;
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
-  ctx.setTransform(a, b, -b, a, tx, ty);
+  if (flip) { ctx.translate(SIZE, 0); ctx.scale(-1, 1); }
+  ctx.transform(a, b, -b, a, tx, ty);
   ctx.drawImage(source, 0, 0);
   const pixels = ctx.getImageData(0, 0, SIZE, SIZE).data;
   const data = new Float32Array(3 * SIZE * SIZE);
@@ -92,9 +99,28 @@ async function embed(e: Engine, source: CanvasImageSource, points: number[]): Pr
   return normalize(output[e.session.outputNames[0]].data as Float32Array);
 }
 
-export type CaptureOptions = { blink: boolean; frames: number; onStatus: (text: string) => void; signal: AbortSignal; timeoutMs?: number };
+export type CaptureOptions = { blink: boolean; frames: number; spacingMs?: number; onStatus: (text: string) => void; signal: AbortSignal; timeoutMs?: number };
 
-/** Watches the video until one live face is seen (with a blink if asked), then returns the averaged 128-number template. */
+/** Frame quality: frontal pose, large enough and well lit. Returns a hint when the frame should not be used. */
+function qualityHint(points: Point[], box: { x: number; y: number; width: number; height: number }, video: HTMLVideoElement, ctx: CanvasRenderingContext2D): string | null {
+  if (box.width < video.videoWidth * 0.2) return 'Move a little closer';
+  const left = mean(points.slice(36, 42)), right = mean(points.slice(42, 48));
+  const eyes = dist(left, right), mid = { x: (left.x + right.x) / 2, y: (left.y + right.y) / 2 }, nose = points[30];
+  // Calibrated on frontal portraits: yaw -0.03..0.09, pitch 0.58..0.70.
+  if (Math.abs((nose.x - mid.x) / eyes) > 0.18) return 'Look straight at the camera';
+  const pitch = (nose.y - mid.y) / eyes;
+  if (pitch < 0.45) return 'Lower your chin a little';
+  if (pitch > 0.85) return 'Raise your chin a little';
+  const sx = Math.max(0, Math.round(box.x)), sy = Math.max(0, Math.round(box.y));
+  const px = ctx.getImageData(sx, sy, Math.max(1, Math.min(Math.round(box.width), video.videoWidth - sx)), Math.max(1, Math.min(Math.round(box.height), video.videoHeight - sy))).data;
+  let luma = 0;
+  for (let i = 0; i < px.length; i += 16) luma += 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+  luma /= px.length / 16;
+  if (luma < 55) return 'More light on your face, please';
+  if (luma > 215) return 'Too bright: move away from direct light';
+  return null;
+}
+
 /** Luma contrast around one eye: high for an open eye (white sclera, dark iris), low for a closed lid (skin). */
 function eyeContrast(ctx: CanvasRenderingContext2D, eye: Point[]): number {
   const xs = eye.map(q => q.x), ys = eye.map(q => q.y);
@@ -118,7 +144,8 @@ function eyeContrast(ctx: CanvasRenderingContext2D, eye: Point[]): number {
 export async function captureTemplate(video: HTMLVideoElement, options: CaptureOptions): Promise<number[]> {
   options.onStatus('Loading the face check…');
   const e = await loadFaceEngine();
-  const detector = new e.faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+  const detector = new e.faceapi.SsdMobilenetv1Options({ minConfidence: 0.5, maxResults: 3 });
+  let lastSample = 0;
   const deadline = Date.now() + (options.timeoutMs ?? 40_000);
   const probe = document.createElement('canvas');
   const probeCtx = probe.getContext('2d', { willReadFrequently: true })!;
@@ -133,10 +160,11 @@ export async function captureTemplate(video: HTMLVideoElement, options: CaptureO
     if (faces.length === 0) { options.onStatus('Look at the camera'); openFrames = 0; continue; }
     if (faces.length > 1) { options.onStatus('Only one face, please'); openFrames = 0; continue; }
     const face = faces[0];
-    if (face.detection.box.width < video.videoWidth * 0.18) { options.onStatus('Move a little closer'); continue; }
     const points = face.landmarks.positions;
     probe.width = video.videoWidth; probe.height = video.videoHeight;
     probeCtx.drawImage(video, 0, 0);
+    const hint = qualityHint(points, face.detection.box, video, probeCtx);
+    if (hint) { options.onStatus(hint); continue; }
     const ear = eyeOpenness(points);
     const contrast = (eyeContrast(probeCtx, points.slice(36, 42)) + eyeContrast(probeCtx, points.slice(42, 48))) / 2;
     const now = Date.now();
@@ -153,6 +181,8 @@ export async function captureTemplate(video: HTMLVideoElement, options: CaptureO
       continue;
     }
     if (contrastBase > 0 && (contrast < contrastBase * 0.85 || ear < earBase * 0.85)) continue; // skip frames with closed eyes
+    if (now - lastSample < (options.spacingMs ?? 150)) continue; // spread samples over time for a steadier template
+    lastSample = now;
     samples.push(await embed(e, video, fivePoints(points)));
     options.onStatus(`Hold still… ${samples.length}/${options.frames}`);
   }
