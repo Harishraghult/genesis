@@ -189,7 +189,7 @@ function Dashboard({ auth }: { auth: Auth }) {
             }
           }
         }
-        if (session.state === 'active' || session.state === 'checkin_pending') {
+        if (session.state === 'active') {
           const next = await api<Challenge>(`/sessions/${session.id}/qr`, token);
           if (active) setChallenge(next);
         }
@@ -232,14 +232,18 @@ function Dashboard({ auth }: { auth: Auth }) {
     } catch (e) { setError((e as Error).message); }
     finally { setSaving(null); }
   }
-  async function changeState(action: 'start' | 'activate' | 'pause' | 'resume' | 'end') {
+  async function changeState(action: 'start' | 'pause' | 'resume' | 'end') {
     if (!session) return;
     setError(''); setNotice(''); setSaving(-1);
     try {
-      await api(`/sessions/${session.id}/${action}`, token, { method: 'POST' });
+      // Start session = open check-in and start class in one step; the QR exists only from here on.
+      if (action === 'start') {
+        if (session.state === 'ready') await api(`/sessions/${session.id}/start`, token, { method: 'POST' });
+        await api(`/sessions/${session.id}/activate`, token, { method: 'POST' });
+      } else await api(`/sessions/${session.id}/${action}`, token, { method: 'POST' });
       const updated = await api<Session>(`/sessions/${session.id}`, token);
       setSessions(rows => rows.map(row => row.id === updated.id ? updated : row));
-      setSession(updated); setNotice(action === 'start' ? 'Check-in is open. The QR rotates every 20 seconds.' : `Session ${updated.state.replace('_', ' ')}.`);
+      setSession(updated); setNotice(action === 'start' ? 'Session started. Students can scan the QR; it changes every 20 seconds.' : `Session ${updated.state.replace('_', ' ')}.`);
     } catch (e) { setError((e as Error).message); } finally { setSaving(null); }
   }
   async function refreshSession() {
@@ -265,7 +269,7 @@ function Dashboard({ auth }: { auth: Auth }) {
       const created = await api<Session>('/sessions', token, { method: 'POST', body: JSON.stringify({ course_id: course.id, title: newTitle.trim(), starts_at: starts.toISOString(), ends_at: ends.toISOString(), room_code: newRoom.trim() }) });
       setSessions(rows => [...rows, created].sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime()));
       setSession(created); setNewTitle(''); setCreateOpen(false); setSection('overview');
-      setNotice('Session scheduled. Open check-in when its start time arrives.');
+      setNotice('Session scheduled. Press Start session at class time to show the QR.');
     } catch (e) { setError((e as Error).message); } finally { setSaving(null); }
   }
   async function addResource(event: React.FormEvent) {
@@ -358,8 +362,7 @@ function Dashboard({ auth }: { auth: Auth }) {
           <div className="session-select"><label>Selected session<select value={session?.id ?? ''} disabled={!sessions.length || saving !== null} onChange={e => { setSession(sessions.find(s => s.id === Number(e.target.value)) ?? null); setNotice(''); }}>{!sessions.length && <option value="">No sessions yet</option>}{sessions.map(s => <option key={s.id} value={s.id}>{s.title} · {date(s.starts_at)} · {stateLabel(s.state)}</option>)}</select></label>{session && <button className="secondary" onClick={refreshSession} disabled={saving !== null}>Refresh data</button>}</div>
           {!session ? <div className="empty-state"><h3>No session selected</h3><p>Create a session for this course to show a live QR and begin taking attendance.</p><button onClick={() => setCreateOpen(true)} disabled={!course}>Create session</button></div> : <>
             <div className="session-banner"><div><span className={`state-badge state-${session.state}`}>{stateLabel(session.state)}</span><h3>{session.title}</h3><p>{date(session.starts_at)} — {date(session.ends_at)} · Room {session.room_code ?? 'UNASSIGNED'}</p></div><div className="session-actions">
-              {canOpen && <button onClick={() => changeState('start')} disabled={saving !== null}>Open check-in</button>}
-              {session.state === 'checkin_pending' && !sessionExpired && <button onClick={() => changeState('activate')} disabled={saving !== null}>Begin active session</button>}
+              {(canOpen || (session.state === 'checkin_pending' && !sessionExpired)) && <button onClick={() => changeState('start')} disabled={saving !== null}>Start session</button>}
               {session.state === 'active' && !sessionExpired && <button onClick={() => changeState('pause')} disabled={saving !== null}>Pause session</button>}
               {session.state === 'paused' && !sessionExpired && <button onClick={() => changeState('resume')} disabled={saving !== null}>Resume session</button>}
               {['checkin_pending', 'active', 'paused'].includes(session.state) && <button className="secondary" onClick={() => changeState('end')} disabled={saving !== null}>End session</button>}
@@ -369,7 +372,7 @@ function Dashboard({ auth }: { auth: Auth }) {
               <span>Sound and optional browser notifications work for new focus events while this dashboard is open. They do not change attendance.</span>
             </div>
             {focusAlert && <div className="focus-alert-overlay"><div className="focus-alert-popup" role="alertdialog" aria-modal="true" aria-label="Notification"><span className="eyebrow">New notification</span><h3>Needs your attention</h3><p>{focusAlert}</p><div className="actions"><button type="button" onClick={() => { setSection('activity'); setFocusAlert(''); }}>View activity</button><button type="button" className="secondary" onClick={() => setFocusAlert('')}>Dismiss</button></div></div></div>}
-            {session.state === 'ready' && !canOpen && <p className="inline-hint">{sessionExpired ? 'This session window has passed. Create a new session to open check-in.' : 'Check-in can open at the scheduled start time.'}</p>}
+            {session.state === 'ready' && !canOpen && <p className="inline-hint">{sessionExpired ? 'This session window has passed. Create a new session to start class.' : 'You can start this session at its scheduled time.'}</p>}
             <div className="stat-grid" aria-label="Session attendance summary"><div className="stat"><strong>{presentCount}</strong><span>Present</span></div><div className="stat"><strong>{unrecordedCount}</strong><span>Not recorded</span></div><div className="stat"><strong>{reviewedCount}</strong><span>Pending review</span></div><div className="stat"><strong>{resources.length}</strong><span>Resources</span></div></div>
             {(exitRequests.length > 0 || pending.length > 0 || privacyRequests.length > 0 || recentFocus.length > 0) && <section className="notification-card" aria-label="Notifications"><div className="section-heading"><div><p className="eyebrow">Notifications</p><h3>{exitRequests.length + pending.length + privacyRequests.length + recentFocus.length} item{exitRequests.length + pending.length + privacyRequests.length + recentFocus.length === 1 ? '' : 's'} need attention</h3></div></div>
               {exitRequests.map(request => <div className="request-row" key={`request-${request.id}`}><div><strong>{roster.find(person => person.id === request.student_id)?.name ?? `Student ${request.student_id}`}</strong> {request.kind === 'resume' ? 'left the app and needs approval to continue' : 'asks to end focus early'}<small>Asked {date(request.created_at)} · attendance is unchanged</small></div><div className="actions"><button disabled={saving !== null} onClick={() => resolveExit(request, 'approve')}>Approve</button><button className="secondary" disabled={saving !== null} onClick={() => resolveExit(request, 'deny')}>Deny</button></div></div>)}
@@ -379,7 +382,7 @@ function Dashboard({ auth }: { auth: Auth }) {
             </section>}
             <nav className="section-tabs" aria-label="Session sections">{(['overview', 'roster', 'resources', 'activity'] as const).map(tab => <button key={tab} type="button" className={section === tab ? 'active' : ''} aria-current={section === tab ? 'page' : undefined} onClick={() => setSection(tab)}>{tab === 'overview' ? 'Overview' : tab === 'roster' ? 'Roster' : tab === 'resources' ? 'Resources' : 'Activity'}</button>)}</nav>
             {section === 'overview' && <div className="overview-grid"><div className="overview-main">
-              {(session.state === 'active' || session.state === 'checkin_pending') && !sessionExpired ? <div className="qr-panel"><div className="section-heading"><div><p className="eyebrow">Live check-in</p><h3>Scan this QR in class</h3></div><span className="live-dot">Rotates every 20 sec</span></div>{qrImage ? <img src={qrImage} alt="Rotating attendance QR challenge" width="280" height="280"/> : <p role="status">Loading QR…</p>}<p className="hint">Current challenge expires {challenge ? date(challenge.expires_at) : 'soon'}.</p><p className="note">A QR check-in is evidence of participation, not proof of physical presence. Expired codes are not accepted later.</p></div> : <div className="empty-state"><h3>No live QR right now</h3><p>{session.state === 'paused' ? 'The session is paused. Resume it to continue check-in.' : session.state === 'ended' ? 'This session has ended. Attendance records remain available.' : 'Open check-in when this session begins.'}</p></div>}
+              {session.state === 'active' && !sessionExpired ? <div className="qr-panel"><div className="section-heading"><div><p className="eyebrow">Live check-in</p><h3>Scan this QR in class</h3></div><span className="live-dot">Rotates every 20 sec</span></div>{qrImage ? <img src={qrImage} alt="Rotating attendance QR challenge" width="280" height="280"/> : <p role="status">Loading QR…</p>}<p className="hint">Current challenge expires {challenge ? date(challenge.expires_at) : 'soon'}.</p><p className="note">A QR check-in is evidence of participation, not proof of physical presence. Expired codes are not accepted later.</p></div> : <div className="empty-state"><h3>No live QR right now</h3><p>{session.state === 'paused' ? 'The session is paused. Resume it to continue check-in.' : session.state === 'ended' ? 'This session has ended. Attendance records remain available.' : 'Press Start session to show the QR. It changes every 20 seconds.'}</p></div>}
             </div><div className="overview-side"><div className="mini-card"><h3>Attendance options</h3><p>Students can scan on Android. You can review and confirm attendance if they decline focus, have camera trouble, or use an unsupported phone.</p><button className="secondary" onClick={() => setSection('roster')}>Open roster →</button></div><div className="mini-card"><h3>Course materials</h3><p>Attach approved college documents for students to view in the app.</p><button className="secondary" onClick={() => setSection('resources')}>Manage resources →</button></div></div></div>}
             {section === 'roster' && <section className="content-section"><div className="section-heading"><div><p className="eyebrow">Attendance</p><h3>Class roster</h3></div><span>{roster.length} students</span></div><p className="note">Teacher confirmation is available without camera, VPN, or Bluetooth. Corrections require a reason and are audited.</p><div className="roster-toolbar"><label>Find student<input type="search" placeholder="Search name or email" value={rosterQuery} onChange={e => setRosterQuery(e.target.value)}/></label><div className="filter-buttons" aria-label="Filter roster">{(['all', 'present', 'unrecorded', 'review'] as const).map(filter => <button type="button" key={filter} className={rosterFilter === filter ? 'selected-filter' : ''} aria-pressed={rosterFilter === filter} onClick={() => setRosterFilter(filter)}>{filter === 'all' ? 'All' : filter === 'present' ? 'Present' : filter === 'unrecorded' ? 'Not recorded' : 'Needs review'}</button>)}</div></div>
               {loadingAttendance && <p role="status">Updating attendance…</p>}

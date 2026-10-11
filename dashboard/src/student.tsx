@@ -10,8 +10,7 @@ type ClassSession = { id: number; course_id: number; course_title: string; title
 type Resource = { id: number; title: string; url: string; kind: 'pdf' | 'text'; downloadable: boolean };
 type HistoryRow = Own & { session_id: number; session: ClassSession };
 type DataRequest = { id: number; session_id: number | null; kind: 'correction' | 'deletion'; reason: string; status: string; resolution: string | null };
-type FocusRequest = { id: number; kind: 'exit' | 'resume'; status: 'pending' | 'approved' | 'denied' };
-type FocusState = 'off' | 'active' | 'paused' | 'left' | 'exited' | 'ended';
+type FocusState = 'off' | 'active' | 'paused' | 'quit' | 'ended';
 
 const STORAGE = 'focuslock-student';
 const isOpen = (s: ClassSession) => s.state === 'checkin_pending' || s.state === 'active';
@@ -173,11 +172,11 @@ function SessionView({ auth, sessionId, onBack, onExpired }: { auth: Auth; sessi
 
     {step === 'disclosure' && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Voluntary focus disclosure"><div className="modal">
       <p className="eyebrow">Before you check in</p><h3>Voluntary class focus</h3>
-      <p>Checking in with the QR also starts voluntary focus while this class is active and this page is open.</p>
+      <p>Checking in with the QR also turns on voluntary focus while the class is running.</p>
       <ul>
-        <li>Pause works any time, even offline.</li>
-        <li>Leaving this page with the screen on sends your teacher a neutral “left the page” flag for review. FocusLock cannot see other apps or why you left.</li>
-        <li>Ending focus early needs your teacher’s current QR or approval.</li>
+        <li>Pause or Quit any time. After quitting, scan the class QR again to join.</li>
+        <li>Leaving this page with the screen on sends your teacher a neutral “left the page” note. FocusLock cannot see other apps or why you left.</li>
+        <li>Turning on Do Not Disturb is up to you.</li>
         <li>Focus never changes your attendance.</li>
       </ul>
       <div className="actions"><button onClick={() => setStep('scan')}>Accept and scan</button><button className="secondary" onClick={() => setStep('review')}>Decline · ask teacher instead</button></div>
@@ -189,115 +188,81 @@ function SessionView({ auth, sessionId, onBack, onExpired }: { auth: Auth; sessi
 function FocusPanel({ auth, session }: { auth: Auth; session: ClassSession }) {
   const token = auth.access_token;
   const key = `focuslock-focus-${auth.user.id}-${session.id}`;
-  const saved = (() => { try { return JSON.parse(sessionStorage.getItem(key) ?? 'null') as { state: FocusState; policy: string; exp: number } | null; } catch { return null; } })();
-  const [state, setStateRaw] = useState<FocusState>(saved?.state ?? 'off');
-  const policy = useRef<{ token: string; exp: number } | null>(saved ? { token: saved.policy, exp: saved.exp } : null);
-  const [request, setRequest] = useState<FocusRequest | null>(null);
-  const [scanning, setScanning] = useState(false);
-  const [error, setError] = useState('');
-  const [now, setNow] = useState(Date.now());
+  const [state, setStateRaw] = useState<FocusState>(() => { try { return (sessionStorage.getItem(key) as FocusState | null) ?? 'off'; } catch { return 'off'; } });
   const stateRef = useRef(state);
-  const setState = (next: FocusState) => {
-    stateRef.current = next; setStateRaw(next);
-    try { if (policy.current) sessionStorage.setItem(key, JSON.stringify({ state: next, policy: policy.current.token, exp: policy.current.exp })); } catch { /* best effort */ }
-  };
-
-  const newPolicy = useCallback(async () => {
-    const result = await api<{ policy: string }>(`/sessions/${session.id}/focus-policy?nonce=${crypto.randomUUID()}`, token);
-    const payload = JSON.parse(atob(result.policy.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))) as { exp: number };
-    policy.current = { token: result.policy, exp: payload.exp };
-  }, [session.id, token]);
+  const policy = useRef<{ token: string; exp: number } | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const setState = (next: FocusState) => { stateRef.current = next; setStateRaw(next); try { sessionStorage.setItem(key, next); } catch { /* best effort */ } };
 
   const send = useCallback(async (action: string) => {
-    if (!policy.current || policy.current.exp * 1000 <= Date.now() + 5000) await newPolicy();
+    const fresh = async () => {
+      const result = await api<{ policy: string }>(`/sessions/${session.id}/focus-policy?nonce=${crypto.randomUUID()}`, token);
+      const payload = JSON.parse(atob(result.policy.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))) as { exp: number };
+      policy.current = { token: result.policy, exp: payload.exp };
+    };
+    if (!policy.current || policy.current.exp * 1000 <= Date.now() + 5000) await fresh();
     const post = () => api(`/sessions/${session.id}/focus-events`, token, { method: 'POST', body: JSON.stringify({ id: crypto.randomUUID(), policy: policy.current!.token, action }) });
     // Events are best effort: a missing event means "unknown" for the teacher, never misconduct.
-    await post().catch(async e => { if (e instanceof ApiError && e.status === 422) { await newPolicy(); await post(); } else throw e; });
-  }, [newPolicy, session.id, token]);
+    await post().catch(async e => { if (e instanceof ApiError && e.status === 422) { await fresh(); await post(); } else throw e; });
+  }, [session.id, token]);
 
-  // Start automatically once the class is active and the student checked in with the QR.
+  // Focus turns on by itself once the class is active after a QR check-in, and off when the class ends.
   useEffect(() => {
-    if (session.state === 'ended' && ['active', 'paused', 'left'].includes(stateRef.current)) { setState('ended'); return; }
+    if (session.state === 'ended' && stateRef.current !== 'off') { setState('ended'); return; }
     if (session.state !== 'active' || stateRef.current !== 'off') return;
-    newPolicy().then(() => { setState('active'); return send('started'); }).catch(e => setError((e as Error).message));
-  }, [session.state, newPolicy, send]);
+    setState('active');
+    send('started').catch(e => setError((e as Error).message));
+  }, [session.state, send]);
 
-  // Leaving the page while focus is active: neutral review flag, then ask the teacher to continue.
+  // Leaving the page while focus is on only sends a neutral review note; nothing is locked.
   useEffect(() => {
     const onVisibility = () => {
-      if (document.visibilityState === 'hidden' && stateRef.current === 'active' && session.state === 'active') {
-        setState('left');
-        void send('backgrounded').catch(() => undefined);
-      }
+      if (document.visibilityState === 'hidden' && stateRef.current === 'active' && session.state === 'active') void send('backgrounded').catch(() => undefined);
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, [send, session.state]);
 
-  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
-  useEffect(() => {
-    if (policy.current && ['active', 'paused'].includes(state) && policy.current.exp * 1000 <= now) setState('ended');
-  }, [now, state]);
-
-  // Poll the teacher's decision on a pending exit/resume request.
-  useEffect(() => {
-    if (!request || request.status !== 'pending') return;
-    const timer = setInterval(async () => {
-      try {
-        const latest = await api<FocusRequest>(`/sessions/${session.id}/focus-${request.kind}-requests/mine`, token);
-        setRequest(latest);
-        if (latest.status === 'approved') {
-          if (latest.kind === 'exit') { setState('exited'); await send('exited').catch(() => undefined); }
-          else { setState('active'); await send('resumed').catch(() => undefined); }
-        }
-      } catch { /* keep waiting */ }
-    }, 4000);
-    return () => clearInterval(timer);
-  }, [request, send, session.id, token]);
-
-  async function act(action: 'paused' | 'resumed') {
-    setError('');
-    setState(action === 'paused' ? 'paused' : 'active');
-    await send(action).catch(() => setError('Saved on this phone. The teacher may not see this change until you are back online.'));
+  async function act(next: FocusState, action: 'paused' | 'resumed' | 'exited') {
+    setError(''); setState(next);
+    await send(action).catch(() => setError('Saved on this phone. Your teacher may not see this until you are back online.'));
   }
-  async function ask(kind: 'exit' | 'resume') {
-    setError('');
-    try { setRequest(await api<FocusRequest>(`/sessions/${session.id}/focus-${kind}-requests`, token, { method: 'POST' })); }
-    catch (e) { setError((e as Error).message); }
-  }
-  async function exitWithQr(qr: string) {
-    setScanning(false); setError('');
-    try {
-      await api(`/sessions/${session.id}/focus-exit/qr`, token, { method: 'POST', body: JSON.stringify({ qr }) });
-      setState('exited'); await send('exited').catch(() => undefined);
-    } catch (e) { setError((e as Error).message); }
+  async function rejoin(qr: string) {
+    setScanning(false); setBusy(true); setError('');
+    try { await checkIn(auth.user.id, token, qr); setState('active'); await send('started'); }
+    catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
 
-  const remaining = policy.current ? Math.max(0, policy.current.exp * 1000 - now) : 0;
-  const clock = `${Math.floor(remaining / 60000)}:${String(Math.floor(remaining / 1000) % 60).padStart(2, '0')}`;
-  const waiting = request?.status === 'pending';
+  const live = session.state === 'active';
   return <div className={`card focus focus-${state}`}>
     <p className="eyebrow">Voluntary focus</p>
-    <h3>{{ off: 'Starts when class becomes active', active: 'Focus is on', paused: 'Focus paused', left: 'You left the page', exited: 'Focus ended', ended: 'Focus finished' }[state]}</h3>
-    {['active', 'paused'].includes(state) && <p className="clock" aria-label="Time left in this focus period">{clock}</p>}
-    {state === 'active' && <p>Stay on this page during class. Your phone remains yours; attendance is unchanged by focus.</p>}
-    {state === 'paused' && <p>Paused on this phone. Resume when you are ready.</p>}
-    {state === 'left' && <p>You left the page during focus. Your teacher received a neutral review flag. Ask your teacher to let you continue.</p>}
-    {state === 'exited' && <p>Your teacher approved ending focus. Your attendance is unchanged.</p>}
-    {state === 'ended' && <p>This focus period is over. Your attendance is unchanged.</p>}
+    <h3>{state === 'active' ? 'Focus is on' : state === 'paused' ? 'Focus paused' : state === 'quit' ? 'You quit focus' : state === 'ended' ? 'Class ended' : 'Starts when your teacher starts class'}</h3>
+    {state === 'active' && <p>Stay with the class. Your phone remains yours, and focus never changes your attendance.</p>}
+    {state === 'paused' && <p>Paused. Resume whenever you are ready.</p>}
+    {state === 'quit' && <p>Your attendance is unchanged. Scan the class QR again to join focus.</p>}
     {error && <p className="error" role="alert">{error}</p>}
-    {waiting && <p className="success" role="status">Waiting for your teacher to {request!.kind === 'exit' ? 'approve ending focus' : 'let you continue'}…</p>}
-    {request?.status === 'denied' && <p className="hint">Your teacher declined that request.</p>}
     <div className="actions">
-      {state === 'active' && <button onClick={() => void act('paused')}>Pause now</button>}
-      {state === 'paused' && <button onClick={() => void act('resumed')}>Resume</button>}
-      {state === 'left' && <button disabled={waiting} onClick={() => void ask('resume')}>Ask teacher to continue</button>}
-      {['active', 'paused'].includes(state) && <>
-        <button className="secondary" onClick={() => setScanning(true)}>End focus with teacher’s QR</button>
-        <button className="secondary" disabled={waiting} onClick={() => void ask('exit')}>Ask teacher to end focus</button>
-      </>}
+      {state === 'active' && <button onClick={() => void act('paused', 'paused')}>Pause</button>}
+      {state === 'paused' && <button onClick={() => void act('active', 'resumed')}>Resume</button>}
+      {(state === 'active' || state === 'paused') && <button className="secondary" onClick={() => void act('quit', 'exited')}>Quit</button>}
+      {state === 'quit' && live && <button disabled={busy} onClick={() => setScanning(true)}>{busy ? 'Joining…' : 'Join again'}</button>}
     </div>
-    {scanning && <QrScanner title="Scan your teacher’s current QR to end focus" onResult={qr => void exitWithQr(qr)} onCancel={() => setScanning(false)}/>}
+    {(state === 'active' || state === 'paused') && <DndCard/>}
+    {scanning && <QrScanner title="Scan the class QR to join again" onResult={qr => void rejoin(qr)} onCancel={() => setScanning(false)}/>}
+  </div>;
+}
+
+function DndCard() {
+  const [on, setOn] = useState(() => { try { return sessionStorage.getItem('focuslock-dnd') === 'on'; } catch { return false; } });
+  const [open, setOpen] = useState(false);
+  const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const toggle = () => { const next = !on; setOn(next); try { sessionStorage.setItem('focuslock-dnd', next ? 'on' : 'off'); } catch { /* best effort */ } };
+  return <div className="dnd">
+    <div><strong>Do Not Disturb</strong><small>{on ? 'Marked as on. Remember to turn it off after class.' : 'Silence notifications during class.'}</small></div>
+    <div className="actions"><button className={on ? 'secondary' : ''} onClick={toggle}>{on ? 'I turned it off' : 'I turned it on'}</button><button className="secondary" onClick={() => setOpen(o => !o)}>{open ? 'Hide steps' : 'How?'}</button></div>
+    {open && <p className="hint">{ios ? 'Swipe down from the top-right corner to open Control Center, tap Focus, then Do Not Disturb.' : 'Swipe down from the top of the screen twice to open Quick Settings, then tap Do Not Disturb.'} Websites cannot switch it on for you. The FocusLock Android app can turn it on automatically if you allow it.</p>}
   </div>;
 }
 
