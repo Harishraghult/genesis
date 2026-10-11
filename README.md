@@ -22,7 +22,7 @@ Voluntary focus can only start after a completed QR check-in; the server refuses
 
 ## Hosted demo
 
-For a quick hosted demo with mock data and no database, deploy the [Render Blueprint](docs/RENDER_DEPLOYMENT.md) (`render.yaml`). It is for demos only, never real student data.
+For a quick hosted demo with mock data and no database, deploy the [Render Blueprint](docs/RENDER_DEPLOYMENT.md) (`render.yaml`). It is for demos only, never real student data. Teachers use the site root; students can use the Android app or the [student web app](docs/STUDENT_WEB.md) at `/student` in a phone browser.
 
 ## Production integration
 

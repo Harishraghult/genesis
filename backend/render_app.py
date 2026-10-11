@@ -8,12 +8,12 @@ from app.main import app as focuslock_api
 
 STATIC = Path(os.environ.get("DASHBOARD_DIST", Path(__file__).parent / "static")).resolve()
 
-# Mirrors dashboard/nginx.conf, plus HSTS because Render terminates HTTPS.
+# Mirrors dashboard/nginx.conf, plus HSTS because Render terminates HTTPS. camera=(self) lets the student page scan QR codes.
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
-    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), bluetooth=(), usb=(), payment=(), interest-cohort=()",
+    "Permissions-Policy": "camera=(self), microphone=(), geolocation=(), bluetooth=(), usb=(), payment=(), interest-cohort=()",
     "Cross-Origin-Opener-Policy": "same-origin",
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
     "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; "

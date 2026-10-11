@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import QRCode from 'qrcode';
 import './styles.css';
+import { api, date, stateLabel, url64 } from './api';
+import { StudentApp } from './student';
 
 type User = { id: number; name: string; email: string; role: 'student' | 'teacher' };
 type Course = { id: number; code: string; title: string; term: string };
@@ -16,10 +18,7 @@ type FocusEvent = { id: string; student_id: number; action: string; recorded_at:
 type PrivacyRequest = { id: number; student_id: number; session_id: number; kind: 'correction' | 'deletion'; reason: string };
 type Auth = { access_token: string; user: User };
 type AuthConfig = { development_login: boolean; college_oidc: boolean; authorization_endpoint: string | null; dashboard_client_id: string | null; dashboard_redirect_uri: string | null };
-const date = (value: string) => new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 const localInput = (value: Date) => new Date(value.getTime() - value.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
-const stateLabel = (value: string) => value === 'checkin_pending' ? 'Check-in pending' : value.replace('_', ' ').replace(/^./, letter => letter.toUpperCase());
-const url64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 function playAlertTone(context: AudioContext) {
   const start = context.currentTime;
   [880, 660].forEach((frequency, index) => {
@@ -35,17 +34,6 @@ function playAlertTone(context: AudioContext) {
   });
 }
 
-async function api<T>(path: string, token?: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch('/api' + path, { ...options, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } }).catch(() => { throw new Error('Cannot reach FocusLock. Check your connection and try again.'); });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    const fallback = [502, 503, 504].includes(response.status) ? `The FocusLock API is not reachable (${response.status}). Check that the API service is running, then try again.`
-      : response.status >= 500 ? `The FocusLock API hit an unexpected error (${response.status}). Refresh to see what was saved before retrying, and check the API logs if it persists.`
-      : `Request failed (${response.status}).`;
-    throw new Error(response.status === 401 ? 'Sign-in expired or credentials are invalid. Please sign in again.' : typeof body.detail === 'string' ? body.detail : Array.isArray(body.detail) ? body.detail.map((item: { msg?: string }) => item.msg ?? 'Invalid input').join('; ') : fallback);
-  }
-  return response.status === 204 ? undefined as T : response.json();
-}
 
 function App() {
   const [auth, setAuth] = useState<Auth | null>(null);
@@ -93,7 +81,7 @@ function App() {
       const result = await api<Auth>('/auth/dev-login', undefined, { method: 'POST', body: JSON.stringify({ email, password }) });
       if (result.user.role !== 'teacher') {
         await api('/auth/logout', result.access_token, { method: 'POST' });
-        throw new Error('Use a teacher demo account here. Students use the Android app.');
+        throw new Error('This is the teacher sign-in. Students sign in at /student or use the Android app.');
       }
       setPassword(''); setAuth(result);
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
@@ -106,7 +94,7 @@ function App() {
   return <><header><div className="brand">FocusLock<span>TEACHER WORKSPACE</span></div>{auth && <div className="account">{auth.user.name}<button className="secondary" onClick={signOut}>Sign out</button></div>}</header>
     {enabled && <div className="dev-banner">DEMO · Sample accounts and courses. Do not enter real student data.</div>}
     {!auth ? <main className="login"><div><p className="eyebrow">A calmer start to class</p><h1>Attendance with<br/>student choice.</h1><p>Manage your classes and confirm attendance. Students keep control of their personal phones.</p><p className="note">No Bluetooth, VPN or device permissions needed for attendance.</p></div>
-      <div className="panel"><h2>Teacher sign-in</h2>{enabled ? <form onSubmit={signIn}><p>Development accounts only</p><label>Email<input type="email" autoComplete="username" required value={email} onChange={e => setEmail(e.target.value)}/></label><label>Demo password<input type="password" autoComplete="current-password" required value={password} onChange={e => setPassword(e.target.value)}/></label><p className="hint">Use DEV_PASSWORD from your local .env file.</p><button disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button></form> : <><p>Use your college account.</p><button disabled={!college?.college_oidc || !college.authorization_endpoint || busy} onClick={() => void collegeSignIn()}>Sign in with college</button>{!college?.college_oidc && <p role="status">College authentication needs administrator configuration.</p>}</>}{error && <p className="error" role="alert">{error}</p>}</div></main>
+      <div className="panel"><h2>Teacher sign-in</h2>{enabled ? <form onSubmit={signIn}><p>Development accounts only</p><label>Email<input type="email" autoComplete="username" required value={email} onChange={e => setEmail(e.target.value)}/></label><label>Demo password<input type="password" autoComplete="current-password" required value={password} onChange={e => setPassword(e.target.value)}/></label><p className="hint">Use the demo password (DEV_PASSWORD). Students: <a href="/student">open the student app</a>.</p><button disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button></form> : <><p>Use your college account.</p><button disabled={!college?.college_oidc || !college.authorization_endpoint || busy} onClick={() => void collegeSignIn()}>Sign in with college</button>{!college?.college_oidc && <p role="status">College authentication needs administrator configuration.</p>}</>}{error && <p className="error" role="alert">{error}</p>}</div></main>
       : <Dashboard auth={auth}/>}
     <footer>A QR check-in is evidence of participation, not proof of physical presence. Teacher confirmation remains available when scanning fails or focus is declined.</footer></>;
 }
@@ -407,4 +395,5 @@ function Dashboard({ auth }: { auth: Auth }) {
   </main>;
 }
 
-createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>);
+const isStudent = window.location.pathname === '/student' || window.location.pathname.startsWith('/student/');
+createRoot(document.getElementById('root')!).render(<React.StrictMode>{isStudent ? <StudentApp/> : <App/>}</React.StrictMode>);
