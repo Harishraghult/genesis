@@ -33,7 +33,9 @@ export async function POST(
     SESSION_STATE.session_id = session.id;
   } else if (action === "end") {
     newState = "ended";
-    SESSION_STATE.is_active = false;
+    session.state = "ended";
+    const anyOtherActive = SESSIONS_LIST.some((s) => s.id !== session.id && (s.state === "active" || s.state === "checkin_pending"));
+    SESSION_STATE.is_active = anyOtherActive;
     SESSION_STATE.ended_at = Date.now();
   } else {
     return NextResponse.json({ detail: `Invalid session action: ${action}` }, { status: 400 });

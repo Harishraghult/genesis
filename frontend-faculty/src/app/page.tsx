@@ -328,6 +328,30 @@ export default function UnifiedFacultyDashboard() {
         const updated: SessionItem = await res.json();
         setSessions((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
         setSelectedSession(updated);
+        if (action === "end") {
+          // Parallel call to /api/session/end to ensure global SESSION_STATE.is_active = false
+          fetch(`${getApiBase()}/api/session/end`, { method: "POST" }).catch(() => {});
+
+          // Instant broadcast to all student tabs
+          try {
+            const bc = new BroadcastChannel("focuslock-session-sync");
+            bc.postMessage({ type: "SESSION_ENDED", sessionId: selectedSession.id, timestamp: Date.now() });
+            bc.close();
+          } catch {}
+
+          // Set storage signal for instant cross-tab reactivity
+          try {
+            localStorage.setItem("fl_session_active", "false");
+            localStorage.setItem("fl_last_ended_session", selectedSession.id);
+            localStorage.setItem("fl_session_ended_time", Date.now().toString());
+          } catch {}
+
+          // Signal WebSocket clients
+          try {
+            wsClient.publish({ type: "SESSION_ENDED", session_id: selectedSession.id });
+          } catch {}
+        }
+
         setStatusMessage(
           action === "start"
             ? "Check-in is now OPEN. Rotating QR challenge is live."

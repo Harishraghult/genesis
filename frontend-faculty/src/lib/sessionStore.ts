@@ -321,10 +321,13 @@ export function syncFromDisk() {
       if (Array.isArray(parsed.sessions_list) && parsed.sessions_list.length > 0) {
         SESSIONS_LIST.length = 0;
         SESSIONS_LIST.push(...parsed.sessions_list);
-        const active = SESSIONS_LIST.find((s) => s.state === "active" || s.state === "checkin_pending");
-        if (active) {
-          SESSION_STATE.is_active = true;
-          SESSION_STATE.session_id = active.id;
+        if (SESSION_STATE.is_active) {
+          const active = SESSIONS_LIST.find((s) => s.state === "active" || s.state === "checkin_pending");
+          if (active) {
+            SESSION_STATE.session_id = active.id;
+          } else {
+            SESSION_STATE.is_active = false;
+          }
         }
       }
       if (Array.isArray(parsed.resources_list)) {

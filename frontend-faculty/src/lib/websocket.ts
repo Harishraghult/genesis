@@ -75,6 +75,10 @@ class WebSocketClient {
       this.socket.send(JSON.stringify(payload));
     }
   }
+
+  public publish(payload: any) {
+    this.send(payload);
+  }
 }
 
 export const wsClient = new WebSocketClient();
