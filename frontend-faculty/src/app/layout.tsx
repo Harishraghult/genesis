@@ -12,8 +12,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
-      <body className="min-h-screen bg-slate-950 text-slate-100 antialiased">
+    <html lang="en">
+      <body className="min-h-screen bg-[#FAF9F5] text-[#1E293B] antialiased">
         {children}
       </body>
     </html>
