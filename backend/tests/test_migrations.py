@@ -32,3 +32,11 @@ def test_migration_round_trip(tmp_path):
     alembic("check")
     alembic("downgrade", "base")
     alembic("upgrade", "head")
+
+
+def test_managed_postgres_urls_use_psycopg():
+    from app.db import normalize_url
+    assert normalize_url("postgres://u:p@h/db?sslmode=require") == "postgresql+psycopg://u:p@h/db?sslmode=require"
+    assert normalize_url("postgresql://u:p@h/db") == "postgresql+psycopg://u:p@h/db"
+    assert normalize_url("postgresql+psycopg://u:p@h/db") == "postgresql+psycopg://u:p@h/db"
+    assert normalize_url("sqlite://") == "sqlite://"
