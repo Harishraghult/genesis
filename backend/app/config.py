@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     retention_sighting_days: int = 7
     retention_credential_days: int = 1
     cors_origins: str = "http://localhost:5173"
+    face_template_key: str = ""
+    face_check_mode: str = "enrolled"  # off | enrolled | required
 
     @property
     def dev_auth_enabled(self) -> bool:

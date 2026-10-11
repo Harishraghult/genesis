@@ -68,8 +68,14 @@ class FocusLocal(private val context: Context) {
     fun start(studentId: Int, sessionId: Int, policy: FocusPolicy, nonce: String, requestStart: Long) {
         val (currentBoot, deadline) = verifiedDeadline(studentId, sessionId, policy, nonce, requestStart)
         prefs.edit().putInt("student", studentId).putInt("session", sessionId).putInt("boot", currentBoot)
-            .putLong("deadline", deadline).putString("policy", policy.token).putString("state", "active").apply()
+            .putLong("deadline", deadline).putString("policy", policy.token).putString("state", "active").putBoolean("resume_lock", false).apply()
     }
+
+    /** After the student leaves the app during focus, a teacher must approve before they continue. Survives app restarts. */
+    fun resumeLocked(studentId: Int, sessionId: Int): Boolean =
+        prefs.getInt("student", -1) == studentId && prefs.getInt("session", -1) == sessionId && prefs.getBoolean("resume_lock", false) &&
+            state(studentId, sessionId) in setOf("active", "paused")
+    fun setResumeLock(on: Boolean) { prefs.edit().putBoolean("resume_lock", on).apply() }
 
     fun pause(studentId: Int, sessionId: Int) {
         if (state(studentId, sessionId) == "active") prefs.edit().putString("state", "paused").apply()
@@ -81,7 +87,7 @@ class FocusLocal(private val context: Context) {
 
     fun exit(studentId: Int, sessionId: Int) {
         if (prefs.getInt("student", -1) == studentId && prefs.getInt("session", -1) == sessionId)
-            prefs.edit().putString("state", "ended").apply()
+            prefs.edit().putString("state", "ended").putBoolean("resume_lock", false).apply()
     }
 }
 

@@ -30,6 +30,7 @@ class ChallengeRequest(Strict):
     device_id: str = Field(max_length=36)
     qr: str = Field(max_length=1024)
     focus_disclosure: Literal["accepted"]
+    face_verified: bool = False
 
 
 class CheckIn(ChallengeRequest):
@@ -184,6 +185,8 @@ def checkin_challenge(body: ChallengeRequest, user: User = Depends(current_user)
     from .stage6 import rate_limit
     rate_limit(db, "checkin-challenge", str(user.id), 20)
     device_for(db, user, body.device_id)
+    from .face import require_face
+    require_face(db, user, body.face_verified)
     now = now_utc()
     payload = verify_qr(body.qr, now)
     session = enrolled_session(db, user, payload["sid"])
@@ -195,7 +198,7 @@ def checkin_challenge(body: ChallengeRequest, user: User = Depends(current_user)
     db.commit()
     from .integrity import request_hash
     return {**challenge_view(challenge), "integrity_request_hash": request_hash("checkin",
-        checkin_payload(user.id, body.device_id, challenge.id, challenge.nonce, body.qr))}
+        checkin_payload(user.id, body.device_id, challenge.id, challenge.nonce, body.qr, body.face_verified))}
 
 
 @router.post("/check-ins")
@@ -206,7 +209,9 @@ def checkin(body: CheckIn, user: User = Depends(current_user), db: Session = Dep
     challenge = db.get(DeviceChallenge, body.challenge_id)
     if challenge is None or challenge.purpose != "checkin" or challenge.student_id != user.id or challenge.device_id != device.id or challenge.qr_digest != hashlib.sha256(qr_bytes).hexdigest():
         raise HTTPException(409, "Check-in challenge does not match")
-    canonical = checkin_payload(user.id, device.id, challenge.id, challenge.nonce, body.qr)
+    from .face import require_face
+    require_face(db, user, body.face_verified)
+    canonical = checkin_payload(user.id, device.id, challenge.id, challenge.nonce, body.qr, body.face_verified)
     key, _ = public_key(device.public_key)
     verify_device_signature(key, canonical, body.signature)
     request_digest = hashlib.sha256((canonical + "|" + body.signature).encode("utf-8")).hexdigest()
@@ -237,10 +242,12 @@ def checkin(body: CheckIn, user: User = Depends(current_user), db: Session = Dep
         raise HTTPException(409, "Check-in challenge already used")
     row = db.get(Attendance, (session.id, user.id))
     if row is not None:
+        if body.face_verified and row.method == "qr":
+            row.face_verified = True  # a rejoin scan that passed the face check
         db.commit()
         return {"status": row.status, "method": row.method, "duplicate": True, "session_id": session.id}
-    db.add(Attendance(session_id=session.id, student_id=user.id, course_id=session.course_id, status="present", method="qr", confirmed_by=None, updated_at=now))
-    db.add(AttendanceEvent(session_id=session.id, student_id=user.id, actor_id=user.id, action="qr_checkin", previous_status=None, new_status="present", reason="Focus disclosure v1 accepted before QR submission", recorded_at=now))
+    db.add(Attendance(session_id=session.id, student_id=user.id, course_id=session.course_id, status="present", method="qr", face_verified=body.face_verified, confirmed_by=None, updated_at=now))
+    db.add(AttendanceEvent(session_id=session.id, student_id=user.id, actor_id=user.id, action="qr_checkin", previous_status=None, new_status="present", reason="Focus disclosure v1 accepted before QR submission" + ("; on-device face match claimed" if body.face_verified else ""), recorded_at=now))
     pending = db.scalar(select(PendingAttendance).where(PendingAttendance.session_id == session.id, PendingAttendance.student_id == user.id, PendingAttendance.resolved_at.is_(None)))
     if pending:
         pending.resolved_at = now

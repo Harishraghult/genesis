@@ -88,12 +88,14 @@ def live():
 def ready(db: Session = Depends(get_db)):
     try:
         revision = db.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        if revision != "0005":
+        if revision != "0009":
             raise ValueError("Schema revision mismatch")
         cfg = settings()
         if cfg.app_env == "production" and (not cfg.oidc_clients_configured or
                 min(len(cfg.qr_signing_key), len(cfg.policy_signing_key)) < 32 or
-                cfg.play_integrity_mode not in ("off", "optional", "required")):
+                cfg.play_integrity_mode not in ("off", "optional", "required") or
+                cfg.face_check_mode not in ("off", "enrolled", "required") or
+                (cfg.face_check_mode != "off" and len(cfg.face_template_key) < 32)):
             raise ValueError("Production identity or signing configuration missing")
     except Exception:
         raise HTTPException(503, "Database or schema unavailable")
@@ -267,3 +269,5 @@ from .stage5 import router as stage5_router  # noqa: E402
 app.include_router(stage5_router)
 from .stage6 import router as stage6_router  # noqa: E402
 app.include_router(stage6_router)
+from .face import router as face_router  # noqa: E402
+app.include_router(face_router)

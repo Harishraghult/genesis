@@ -36,13 +36,13 @@ with TestClient(app) as client:
     assert client.post("/check-ins", headers=student, json=body).json()["duplicate"] is False
     assert client.post("/check-ins", headers=student, json=body).json()["duplicate"] is True
     assert client.get("/sessions/1", headers=student).json()["attendance"]["status"] == "present"
-    assert client.put("/sessions/1/attendance/3", headers=teacher, json={"status": "excused", "reason": "Teacher reviewed the classroom roster"}).status_code == 200
-    assert len(client.get("/sessions/1/audit", headers=teacher).json()) >= 2
     assert client.post("/sessions/1/activate", headers=teacher).status_code == 200
     policy = client.get(f"/sessions/1/focus-policy?nonce={uuid4()}", headers=student)
     assert policy.status_code == 200, policy.text
     event = {"id": str(uuid4()), "policy": policy.json()["policy"], "action": "started"}
     assert client.post("/sessions/1/focus-events", headers=student, json=event).status_code == 201
+    assert client.put("/sessions/1/attendance/3", headers=teacher, json={"status": "excused", "reason": "Teacher reviewed the classroom roster"}).status_code == 200
+    assert len(client.get("/sessions/1/audit", headers=teacher).json()) >= 2
     assert client.post("/sessions/1/pause", headers=teacher).status_code == 200
     assert client.post("/sessions/1/resume", headers=teacher).status_code == 200
     assert client.post("/sessions/1/end", headers=teacher).status_code == 200

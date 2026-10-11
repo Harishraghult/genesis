@@ -8,6 +8,7 @@ os.environ["POLICY_SIGNING_KEY"] = "test-policy-signing-key-with-at-least-32-byt
 os.environ["RESOURCE_ALLOWED_HOSTS"] = "college.example.edu,docs.college.example.edu"
 os.environ["BLE_TOKEN_KEY"] = "test-ble-secret-with-at-least-32-bytes-of-entropy"
 os.environ["DEV_RECEIVER_TOKEN"] = "test-receiver-only-token"
+os.environ["FACE_TEMPLATE_KEY"] = "test-face-template-key-with-at-least-32-bytes-of-entropy"
 
 import pytest
 from fastapi.testclient import TestClient

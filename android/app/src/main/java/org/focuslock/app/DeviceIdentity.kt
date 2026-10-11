@@ -41,12 +41,12 @@ class DeviceIdentity(private val context: Context) {
         deviceId
     }
 
-    suspend fun signCheckIn(studentId: Int, deviceId: String, challenge: ServerChallenge, qr: String): String = withContext(Dispatchers.IO) {
+    suspend fun signCheckIn(studentId: Int, deviceId: String, challenge: ServerChallenge, qr: String, faceVerified: Boolean = false): String = withContext(Dispatchers.IO) {
         val alias = prefs.getString(aliasKey(studentId), null) ?: error("Device registration is missing")
         val keystore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         val privateKey = keystore.getKey(alias, null) as? java.security.PrivateKey ?: error("Device key is unavailable; register again")
         val qrDigest = java.security.MessageDigest.getInstance("SHA-256").digest(qr.toByteArray(Charsets.US_ASCII)).joinToString("") { "%02x".format(it) }
-        val message = "FL2|checkin|$studentId|$deviceId|${challenge.id}|${challenge.nonce}|$qrDigest|focus-disclosure-v1|accepted"
+        val message = "FL2|checkin|$studentId|$deviceId|${challenge.id}|${challenge.nonce}|$qrDigest|focus-disclosure-v1|accepted" + if (faceVerified) "|face-match-v1" else ""
         val signer = Signature.getInstance("SHA256withECDSA").apply { initSign(privateKey); update(message.toByteArray(Charsets.UTF_8)) }
         encode(signer.sign())
     }

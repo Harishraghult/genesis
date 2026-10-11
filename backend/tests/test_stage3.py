@@ -30,6 +30,15 @@ def test_resources_are_assigned_and_allowlisted(client):
     assert client.delete(f"{path}/{created.json()['id']}", headers=teacher).status_code == 204
 
 
+def checked_in(client, teacher, student=None):
+    from test_stage2 import checkin_request, register
+    student, key, device_id, _ = register(client, student)
+    qr = client.get("/sessions/1/qr", headers=teacher).json()["qr"]
+    response = client.post("/check-ins", headers=student, json=checkin_request(client, student, key, device_id, qr))
+    assert response.status_code == 200, response.text
+    return student
+
+
 def test_focus_lifecycle_policy_and_attendance_are_separate(client, monkeypatch):
     teacher = login(client, "teacher@focuslock.test")
     student = login(client)
@@ -44,6 +53,8 @@ def test_focus_lifecycle_policy_and_attendance_are_separate(client, monkeypatch)
     assert client.get(policy_url, headers=student).status_code == 409
     assert client.post("/sessions/1/activate", headers=teacher).json()["state"] == "active"
     assert client.get(policy_url, headers=outsider).status_code == 404
+    assert client.get(policy_url, headers=student).status_code == 409  # focus needs the QR check-in first
+    checked_in(client, teacher, student)
     response = client.get(policy_url, headers=student)
     assert response.status_code == 200
     token = response.json()["policy"]
@@ -63,9 +74,10 @@ def test_focus_lifecycle_policy_and_attendance_are_separate(client, monkeypatch)
     assert client.post("/sessions/1/end", headers=teacher).json()["state"] == "ended"
     assert client.get(policy_url, headers=student).status_code == 409
     with client.db_factory() as db:
-        assert db.get(Attendance, (1, 3)) is None
+        row = db.get(Attendance, (1, 3))
+        assert row is not None and row.method == "qr" and row.status == "present"  # focus events never change attendance
         assert len(db.query(FocusEvent).all()) == 1
-    assert client.get("/sessions/1", headers=student).json()["attendance"] is None
+    assert client.get("/sessions/1", headers=student).json()["attendance"]["status"] == "present"
     assert client.post("/sessions/1/activate", headers=teacher).status_code == 409
     assert client.post("/sessions/1/pause", headers=teacher).status_code == 409
     try:
@@ -79,10 +91,11 @@ def test_policy_signature_and_wrong_student_fail(client):
     teacher = login(client, "teacher@focuslock.test")
     student = login(client)
     client.post("/sessions/1/start", headers=teacher)
+    checked_in(client, teacher, student)
     client.post("/sessions/1/activate", headers=teacher)
     token = client.get(f"/sessions/1/focus-policy?nonce={uuid4()}", headers=student).json()["policy"]
     now = stage3.now_utc()
-    for candidate, student_id in ((token, 4), (token[:-1] + ("A" if token[-1] != "A" else "B"), 3)):
+    for candidate, student_id in ((token, 4), (token[:-12] + ("A" if token[-12] != "A" else "B") + token[-11:], 3)):
         try:
             stage3.verify_policy(candidate, student_id, 1, now)
             assert False, "invalid policy was accepted"
@@ -95,6 +108,7 @@ def test_background_flag_is_neutral_idempotent_and_teacher_scoped(client):
     other_teacher = login(client, "teacher2@focuslock.test")
     student = login(client)
     client.post("/sessions/1/start", headers=teacher)
+    checked_in(client, teacher, student)
     client.post("/sessions/1/activate", headers=teacher)
     token = client.get(f"/sessions/1/focus-policy?nonce={uuid4()}", headers=student).json()["policy"]
     flag = {"id": str(uuid4()), "policy": token, "action": "backgrounded"}
@@ -104,7 +118,102 @@ def test_background_flag_is_neutral_idempotent_and_teacher_scoped(client):
     assert client.get("/sessions/1/focus-events", headers=other_teacher).status_code == 404
     events = client.get("/sessions/1/focus-events", headers=teacher).json()
     assert len(events) == 1 and events[0]["id"] == flag["id"] and events[0]["action"] == "backgrounded"
-    assert client.get("/sessions/1", headers=student).json()["attendance"] is None
+    assert client.get("/sessions/1", headers=student).json()["attendance"]["method"] == "qr"
     client.post("/sessions/1/pause", headers=teacher)
     assert client.post("/sessions/1/focus-events", headers=student,
                        json={**flag, "id": str(uuid4())}).status_code == 409
+
+
+def test_early_focus_exit_needs_current_qr_or_teacher_approval(client):
+    teacher = login(client, "teacher@focuslock.test")
+    other_teacher = login(client, "teacher2@focuslock.test")
+    student = login(client)
+    outsider = login(client, "student3@focuslock.test")
+    assert client.post("/sessions/1/start", headers=teacher).status_code == 200
+    assert client.post("/sessions/1/activate", headers=teacher).status_code == 200
+    assert client.post("/sessions/2/start", headers=other_teacher).status_code == 200
+    qr = client.get("/sessions/1/qr", headers=teacher).json()["qr"]
+    other_qr = client.get("/sessions/2/qr", headers=other_teacher).json()["qr"]
+    path = "/sessions/1/focus-exit/qr"
+    assert client.post(path, headers=student, json={"qr": "FL2.bad.bad"}).status_code == 422
+    assert client.post(path, headers=student, json={"qr": other_qr}).status_code in (404, 422)
+    assert client.post(path, headers=outsider, json={"qr": qr}).status_code == 404
+    assert client.post(path, headers=teacher, json={"qr": qr}).status_code == 403
+    assert client.post(path, headers=student, json={"qr": qr}).json() == {"approved": True}
+
+    assert client.get("/sessions/1/focus-exit-requests/mine", headers=student).status_code == 404
+    created = client.post("/sessions/1/focus-exit-requests", headers=student)
+    assert created.status_code == 201 and created.json()["status"] == "pending"
+    again = client.post("/sessions/1/focus-exit-requests", headers=student)
+    assert again.json()["id"] == created.json()["id"]
+    assert client.post("/sessions/1/focus-exit-requests", headers=outsider).status_code == 404
+    assert client.post("/sessions/1/focus-exit-requests", headers=teacher).status_code == 403
+    assert len(client.get("/sessions/1/focus-exit-requests", headers=teacher).json()) == 1
+    assert client.get("/sessions/1/focus-exit-requests", headers=other_teacher).status_code == 404
+    assert client.get("/sessions/1/focus-exit-requests", headers=student).status_code == 403
+    resolve = f"/sessions/1/focus-exit-requests/{created.json()['id']}"
+    assert client.post(resolve, headers=student, json={"decision": "approve"}).status_code == 403
+    assert client.post(resolve, headers=other_teacher, json={"decision": "approve"}).status_code == 404
+    assert client.get("/sessions/1/focus-exit-requests/mine", headers=student).json()["status"] == "pending"
+    assert client.post(resolve, headers=teacher, json={"decision": "approve"}).json()["status"] == "approved"
+    assert client.post(resolve, headers=teacher, json={"decision": "deny"}).status_code == 409
+    assert client.get("/sessions/1/focus-exit-requests/mine", headers=student).json()["status"] == "approved"
+    assert client.get("/sessions/1/focus-exit-requests", headers=teacher).json() == []
+    second = client.post("/sessions/1/focus-exit-requests", headers=student).json()
+    assert second["id"] != created.json()["id"]
+    assert client.post(f"/sessions/1/focus-exit-requests/{second['id']}", headers=teacher, json={"decision": "deny"}).json()["status"] == "denied"
+    assert client.post("/sessions/1/end", headers=teacher).status_code == 200
+    assert client.post("/sessions/1/focus-exit-requests", headers=student).status_code == 409
+
+
+def test_leaving_the_app_needs_teacher_approval_to_continue(client):
+    teacher = login(client, "teacher@focuslock.test")
+    other_teacher = login(client, "teacher2@focuslock.test")
+    student = login(client)
+    outsider = login(client, "student3@focuslock.test")
+    assert client.post("/sessions/1/start", headers=teacher).status_code == 200
+    assert client.post("/sessions/1/activate", headers=teacher).status_code == 200
+    assert client.get("/sessions/1/focus-resume-requests/mine", headers=student).status_code == 404
+    created = client.post("/sessions/1/focus-resume-requests", headers=student)
+    assert created.status_code == 201 and created.json()["kind"] == "resume" and created.json()["status"] == "pending"
+    assert client.post("/sessions/1/focus-resume-requests", headers=student).json()["id"] == created.json()["id"]
+    assert client.post("/sessions/1/focus-resume-requests", headers=outsider).status_code == 404
+    assert client.post("/sessions/1/focus-resume-requests", headers=teacher).status_code == 403
+    # An exit request is a separate kind and does not satisfy the resume request.
+    exit_request = client.post("/sessions/1/focus-exit-requests", headers=student).json()
+    assert exit_request["kind"] == "exit" and exit_request["id"] != created.json()["id"]
+    pending = client.get("/sessions/1/focus-exit-requests", headers=teacher).json()
+    assert {row["kind"] for row in pending} == {"exit", "resume"}
+    assert client.get("/sessions/1/focus-exit-requests", headers=other_teacher).status_code == 404
+    path = f"/sessions/1/focus-resume-requests/{created.json()['id']}"
+    assert client.post(f"/sessions/1/focus-exit-requests/{created.json()['id']}", headers=student, json={"decision": "approve"}).status_code == 403
+    assert client.get("/sessions/1/focus-resume-requests/mine", headers=student).json()["status"] == "pending"
+    assert client.post(f"/sessions/1/focus-exit-requests/{created.json()['id']}", headers=teacher, json={"decision": "deny"}).json()["status"] == "denied"
+    assert client.get("/sessions/1/focus-resume-requests/mine", headers=student).json()["status"] == "denied"
+    again = client.post("/sessions/1/focus-resume-requests", headers=student).json()
+    assert again["status"] == "pending" and again["id"] != created.json()["id"]
+    assert client.post(f"/sessions/1/focus-exit-requests/{again['id']}", headers=teacher, json={"decision": "approve"}).json()["status"] == "approved"
+    assert client.get("/sessions/1/focus-exit-requests/mine", headers=student).json()["status"] == "pending"
+    assert client.post("/sessions/1/end", headers=teacher).status_code == 200
+    assert client.post("/sessions/1/focus-resume-requests", headers=student).status_code == 409
+
+
+def test_student_can_rescan_and_rejoin_focus_after_quitting(client):
+    from test_stage2 import checkin_request, register
+    teacher = login(client, "teacher@focuslock.test")
+    assert client.post("/sessions/1/start", headers=teacher).status_code == 200
+    assert client.post("/sessions/1/activate", headers=teacher).status_code == 200
+    student, key, device_id, _ = register(client)
+    qr = client.get("/sessions/1/qr", headers=teacher).json()["qr"]
+    assert client.post("/check-ins", headers=student, json=checkin_request(client, student, key, device_id, qr)).json()["duplicate"] is False
+    first = client.get(f"/sessions/1/focus-policy?nonce={uuid4()}", headers=student)
+    assert first.status_code == 200
+    # The student quits focus (teacher approval), then scans the QR again to rejoin.
+    request = client.post("/sessions/1/focus-exit-requests", headers=student).json()
+    assert client.post(f"/sessions/1/focus-exit-requests/{request['id']}", headers=teacher, json={"decision": "approve"}).status_code == 200
+    qr_again = client.get("/sessions/1/qr", headers=teacher).json()["qr"]
+    again = client.post("/check-ins", headers=student, json=checkin_request(client, student, key, device_id, qr_again))
+    assert again.status_code == 200 and again.json()["duplicate"] is True and again.json()["method"] == "qr"
+    second = client.get(f"/sessions/1/focus-policy?nonce={uuid4()}", headers=student)
+    assert second.status_code == 200 and second.json()["policy"] != first.json()["policy"]
+    assert client.get("/sessions/1", headers=student).json()["attendance"]["status"] == "present"

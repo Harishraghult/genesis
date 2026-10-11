@@ -98,5 +98,6 @@ def register_payload(student_id: int, challenge_id: str, nonce: str) -> str:
     return f"FL2|register|{student_id}|{challenge_id}|{nonce}"
 
 
-def checkin_payload(student_id: int, device_id: str, challenge_id: str, nonce: str, qr: str) -> str:
-    return f"FL2|checkin|{student_id}|{device_id}|{challenge_id}|{nonce}|{hashlib.sha256(qr.encode('ascii')).hexdigest()}|focus-disclosure-v1|accepted"
+def checkin_payload(student_id: int, device_id: str, challenge_id: str, nonce: str, qr: str, face_verified: bool = False) -> str:
+    base = f"FL2|checkin|{student_id}|{device_id}|{challenge_id}|{nonce}|{hashlib.sha256(qr.encode('ascii')).hexdigest()}|focus-disclosure-v1|accepted"
+    return base + "|face-match-v1" if face_verified else base

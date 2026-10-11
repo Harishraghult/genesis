@@ -7,7 +7,9 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class Student(val id: Int, val name: String)
+data class Student(val id: Int, val name: String, val role: String = "student")
+data class FaceStatus(val mode: String, val enrolled: Boolean, val template: FloatArray?)
+data class FaceRosterEntry(val id: Int, val name: String, val email: String, val enrolled: Boolean)
 data class ClassSession(val id: Int, val title: String, val course: String, val startsAt: String, val endsAt: String, val status: String?, val state: String, val pendingReview: Boolean)
 data class HistoryEntry(val session: ClassSession, val status: String, val updatedAt: String)
 class ApiException(val statusCode: Int, message: String) : Exception(message)
@@ -53,11 +55,7 @@ class Api {
         val response = JSONObject(request("/auth/dev-login", "POST", JSONObject().put("email", email).put("password", password)))
         token = response.getString("access_token")
         val user = response.getJSONObject("user")
-        if (user.getString("role") != "student") {
-            runCatching { signOut() }
-            throw IllegalArgumentException("Use a student demo account. Teachers use the dashboard.")
-        }
-        return Student(user.getInt("id"), user.getString("name"))
+        return Student(user.getInt("id"), user.getString("name"), user.getString("role"))
     }
 
     suspend fun authConfig(): AuthConfig = JSONObject(request("/auth/config")).let {
@@ -70,9 +68,8 @@ class Api {
         val response = JSONObject(request("/auth/oidc/exchange", "POST", JSONObject()
             .put("client", "android").put("code", code).put("verifier", verifier)))
         val user = response.getJSONObject("user")
-        if (user.getString("role") != "student") throw IllegalArgumentException("Student role required")
         token = response.getString("access_token")
-        return Student(user.getInt("id"), user.getString("name"))
+        return Student(user.getInt("id"), user.getString("name"), user.getString("role"))
     }
 
     suspend fun signOut() {
@@ -99,10 +96,10 @@ class Api {
     suspend fun registerDevice(challenge: ServerChallenge, publicKey: String, signature: String, integrityToken: String?): String =
         JSONObject(request("/devices/register", "POST", JSONObject().put("challenge_id", challenge.id)
             .put("public_key", publicKey).put("signature", signature).apply { if (integrityToken != null) put("integrity_token", integrityToken) })).getString("device_id")
-    suspend fun checkInChallenge(deviceId: String, qr: String): ServerChallenge = parseChallenge(JSONObject(request("/check-ins/challenge", "POST", JSONObject().put("device_id", deviceId).put("qr", qr).put("focus_disclosure", "accepted"))))
-    suspend fun checkIn(deviceId: String, qr: String, challengeId: String, signature: String, integrityToken: String?): CheckInResult {
+    suspend fun checkInChallenge(deviceId: String, qr: String, faceVerified: Boolean = false): ServerChallenge = parseChallenge(JSONObject(request("/check-ins/challenge", "POST", JSONObject().put("device_id", deviceId).put("qr", qr).put("focus_disclosure", "accepted").put("face_verified", faceVerified))))
+    suspend fun checkIn(deviceId: String, qr: String, challengeId: String, signature: String, integrityToken: String?, faceVerified: Boolean = false): CheckInResult {
         val response = JSONObject(request("/check-ins", "POST", JSONObject().put("device_id", deviceId).put("qr", qr)
-            .put("challenge_id", challengeId).put("signature", signature).put("focus_disclosure", "accepted").apply { if (integrityToken != null) put("integrity_token", integrityToken) }))
+            .put("challenge_id", challengeId).put("signature", signature).put("focus_disclosure", "accepted").put("face_verified", faceVerified).apply { if (integrityToken != null) put("integrity_token", integrityToken) }))
         return CheckInResult(response.getString("status"), response.getString("method"), response.getBoolean("duplicate"))
     }
     suspend fun requestReview(sessionId: Int, reason: String): String =
@@ -116,6 +113,29 @@ class Api {
     suspend fun focusEvent(sessionId: Int, id: String, policy: String, action: String) {
         request("/sessions/$sessionId/focus-events", "POST", JSONObject().put("id", id).put("policy", policy).put("action", action))
     }
+    suspend fun focusExitWithQr(sessionId: Int, qr: String) {
+        request("/sessions/$sessionId/focus-exit/qr", "POST", JSONObject().put("qr", qr))
+    }
+    suspend fun requestFocusExit(sessionId: Int): String =
+        JSONObject(request("/sessions/$sessionId/focus-exit-requests", "POST")).getString("status")
+    suspend fun focusExitStatus(sessionId: Int): String =
+        JSONObject(request("/sessions/$sessionId/focus-exit-requests/mine")).getString("status")
+    suspend fun requestFocusResume(sessionId: Int): String =
+        JSONObject(request("/sessions/$sessionId/focus-resume-requests", "POST")).getString("status")
+    suspend fun focusResumeStatus(sessionId: Int): String =
+        JSONObject(request("/sessions/$sessionId/focus-resume-requests/mine")).getString("status")
+    suspend fun faceStatus(): FaceStatus = JSONObject(request("/face/templates/me")).let { json ->
+        val template = json.optJSONArray("template")?.let { array -> FloatArray(array.length()) { array.getDouble(it).toFloat() } }
+        FaceStatus(json.getString("mode"), json.getBoolean("enrolled"), template)
+    }
+    suspend fun faceRoster(): List<FaceRosterEntry> = JSONArray(request("/face/roster")).mapObjects {
+        FaceRosterEntry(it.getInt("id"), it.getString("name"), it.getString("email"), it.getBoolean("enrolled"))
+    }
+    suspend fun enrollFace(studentId: Int, template: FloatArray) {
+        request("/face/templates/$studentId", "PUT", JSONObject().put("template", JSONArray(template.map { it.toDouble() }))
+            .put("model", FaceEngine.MODEL_ID).put("consent", true))
+    }
+    suspend fun deleteFace(studentId: Int) { request("/face/templates/$studentId", "DELETE") }
     suspend fun bleCredential(sessionId: Int): BleCredential = JSONObject(request("/sessions/$sessionId/ble-credential", "POST")).let {
         BleCredential(it.getString("secret"), it.getString("server_time"), it.getString("expires_at"), it.getInt("slot_seconds"))
     }

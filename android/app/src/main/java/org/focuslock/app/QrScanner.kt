@@ -34,7 +34,7 @@ fun QrScanner(onQr: (String) -> Unit, onError: (String) -> Unit, modifier: Modif
     val lifecycleOwner = LocalLifecycleOwner.current
     val callback by rememberUpdatedState(onQr)
     val errorCallback by rememberUpdatedState(onError)
-    val previewView = remember { PreviewView(context) }
+    val previewView = remember { PreviewView(context).apply { implementationMode = PreviewView.ImplementationMode.COMPATIBLE; scaleType = PreviewView.ScaleType.FILL_CENTER } }
     DisposableEffect(lifecycleOwner, previewView) {
         val executor = Executors.newSingleThreadExecutor()
         val scanner = BarcodeScanning.getClient(BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build())
@@ -96,7 +96,7 @@ fun ScanScreen(sessionId: Int, loading: Boolean, pending: Boolean, error: String
         val cameraAvailable = context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
         if (!cameraAvailable) Text("This device has no camera. Ask your teacher for confirmation or request review below.")
         else if (!granted) Button(onClick = { launcher.launch(Manifest.permission.CAMERA) }) { Text("Allow camera for this scan") }
-        else if (!scanned && result == null && cameraError == null) QrScanner(onQr = { value -> scanned = true; pendingQr = value }, onError = { cameraError = it }, modifier = Modifier.fillMaxWidth().height(280.dp))
+        else if (!scanned && result == null && cameraError == null) CameraFrame(aspect = 1f, guide = false) { QrScanner(onQr = { value -> scanned = true; pendingQr = value }, onError = { cameraError = it }, modifier = Modifier.fillMaxSize()) }
         cameraError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (loading) CircularProgressIndicator()
         if (result != null) Text(result, color = MaterialTheme.colorScheme.primary)

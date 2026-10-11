@@ -11,6 +11,7 @@ type Attendance = { student_id: number; status: string; method: string };
 type Pending = { student_id: number; reason: string; created_at: string };
 type Audit = { id: number; student_id: number; actor_id: number; action: string; previous_status: string | null; new_status: string; reason: string | null; recorded_at: string };
 type Challenge = { qr: string; expires_at: string; rotation_seconds: number };
+type ExitRequest = { id: number; session_id: number; student_id: number; kind: 'exit' | 'resume'; status: string; created_at: string };
 type FocusEvent = { id: string; student_id: number; action: string; recorded_at: string };
 type PrivacyRequest = { id: number; student_id: number; session_id: number; kind: 'correction' | 'deletion'; reason: string };
 type Auth = { access_token: string; user: User };
@@ -118,6 +119,7 @@ function Dashboard({ auth }: { auth: Auth }) {
   const [audit, setAudit] = useState<Audit[]>([]);
   const [resources, setResources] = useState<Resource[]>([]);
   const [focusEvents, setFocusEvents] = useState<FocusEvent[]>([]);
+  const [exitRequests, setExitRequests] = useState<ExitRequest[]>([]);
   const [soundEnabled, setSoundEnabled] = useState(false);
   const [focusAlert, setFocusAlert] = useState('');
   const alertAudio = useRef<AudioContext | null>(null);
@@ -164,25 +166,32 @@ function Dashboard({ auth }: { auth: Auth }) {
     return () => { active = false; };
   }, [course, token]);
   useEffect(() => {
-    let active = true; let seenFocusIds: Set<string> | null = null;
-    selection.current++; setAttendance([]); setPending([]); setAudit([]); setResources([]); setFocusEvents([]); setFocusAlert(''); setChallenge(null); setQrImage(''); setConfirmation(null);
+    let active = true; let seenFocusIds: Set<string> | null = null; let seenRequestIds: Set<number> | null = null;
+    selection.current++; setAttendance([]); setPending([]); setAudit([]); setResources([]); setFocusEvents([]); setExitRequests([]); setFocusAlert(''); setChallenge(null); setQrImage(''); setConfirmation(null);
     if (!session) { setLoadingAttendance(false); return; }
     setLoadingAttendance(true);
     const refresh = async () => {
       try {
-        const [rows, requests, events, files, focus] = await Promise.all([
+        const [rows, requests, events, files, focus, exits] = await Promise.all([
           api<Attendance[]>(`/sessions/${session.id}/attendance`, token),
           api<Pending[]>(`/sessions/${session.id}/pending`, token),
           api<Audit[]>(`/sessions/${session.id}/audit`, token),
           api<Resource[]>(`/sessions/${session.id}/resources`, token),
-          api<FocusEvent[]>(`/sessions/${session.id}/focus-events`, token)
+          api<FocusEvent[]>(`/sessions/${session.id}/focus-events`, token),
+          api<ExitRequest[]>(`/sessions/${session.id}/focus-exit-requests`, token)
         ]);
         if (active) {
           const newlyBackgrounded = seenFocusIds === null ? [] : focus.filter(event => event.action === 'backgrounded' && !seenFocusIds!.has(event.id));
           seenFocusIds = new Set(focus.map(event => event.id));
-          setAttendance(rows); setPending(requests); setAudit(events); setResources(files); setFocusEvents(focus);
+          setAttendance(rows); setPending(requests); setAudit(events); setResources(files); setFocusEvents(focus); setExitRequests(exits);
+          const newRequests = seenRequestIds === null ? [] : exits.filter(request => !seenRequestIds!.has(request.id));
+          seenRequestIds = new Set(exits.map(request => request.id));
+          if (newRequests.length) {
+            setFocusAlert(`${newRequests.length} student${newRequests.length === 1 ? '' : 's'} need${newRequests.length === 1 ? 's' : ''} your approval: ${newRequests.map(request => request.kind === 'resume' ? 'left the app and wants to continue' : 'asks to end focus early').join(', ')}.`);
+            if (soundEnabled && alertAudio.current?.state === 'running') playAlertTone(alertAudio.current);
+          }
           if (newlyBackgrounded.length) {
-            setFocusAlert(`${newlyBackgrounded.length} new focus interruption${newlyBackgrounded.length === 1 ? '' : 's'} for review. This does not change attendance.`);
+            setFocusAlert(`${newlyBackgrounded.length} new focus interruption${newlyBackgrounded.length === 1 ? '' : 's'} for review. The reason and destination app are unknown, this is not a misconduct finding, and attendance is unchanged.`);
             if (soundEnabled && alertAudio.current?.state === 'running') playAlertTone(alertAudio.current);
             if (soundEnabled && 'Notification' in window && Notification.permission === 'granted') {
               try { new Notification('FocusLock · focus event for review', { body: `${newlyBackgrounded.length} new app background event${newlyBackgrounded.length === 1 ? '' : 's'}. Cause unknown; attendance unchanged.`, tag: `focuslock-${session.id}` }); } catch { /* In-page alert remains available. */ }
@@ -222,6 +231,16 @@ function Dashboard({ auth }: { auth: Auth }) {
       .then(image => { if (active) setQrImage(image); }).catch(e => { if (active) setError((e as Error).message); });
     return () => { active = false; };
   }, [challenge?.qr]);
+  async function resolveExit(request: ExitRequest, decision: 'approve' | 'deny') {
+    if (!session) return;
+    setSaving(request.id);
+    try {
+      await api(`/sessions/${session.id}/focus-exit-requests/${request.id}`, token, { method: 'POST', body: JSON.stringify({ decision }) });
+      setExitRequests(rows => rows.filter(row => row.id !== request.id));
+      setNotice(decision === 'approve' ? (request.kind === 'resume' ? 'Approved. The student can continue.' : 'Approved. Focus will end on that phone shortly.') : 'Denied.');
+    } catch (e) { setError((e as Error).message); }
+    finally { setSaving(null); }
+  }
   async function changeState(action: 'start' | 'activate' | 'pause' | 'resume' | 'end') {
     if (!session) return;
     setError(''); setNotice(''); setSaving(-1);
@@ -320,6 +339,7 @@ function Dashboard({ auth }: { auth: Auth }) {
   });
   const canOpen = session?.state === 'ready' && new Date(session.starts_at) <= new Date() && new Date(session.ends_at) > new Date();
   const sessionExpired = session && new Date(session.ends_at) <= new Date();
+  const recentFocus = focusEvents.filter(event => event.action === 'backgrounded').slice(-5).reverse();
   const selectedPrivacyRequest = privacyRequests.find(request => request.id === privacyReview?.id);
 
   return <main className="dashboard-shell">
@@ -357,9 +377,15 @@ function Dashboard({ auth }: { auth: Auth }) {
               <button className="secondary" type="button" aria-pressed={soundEnabled} onClick={() => void toggleSound()}>{soundEnabled ? 'Mute focus alerts' : 'Enable focus alert sound'}</button>
               <span>Sound and optional browser notifications work for new focus events while this dashboard is open. They do not change attendance.</span>
             </div>
-            {focusAlert && <div className="focus-alert-overlay"><div className="focus-alert-popup" role="alertdialog" aria-modal="true" aria-label="Focus event for review"><span className="eyebrow">New focus event</span><h3>Review a focus interruption</h3><p>{focusAlert} The reason and destination app are unknown. This is not a misconduct finding.</p><div className="actions"><button type="button" onClick={() => { setSection('activity'); setFocusAlert(''); }}>View activity</button><button type="button" className="secondary" onClick={() => setFocusAlert('')}>Dismiss</button></div></div></div>}
+            {focusAlert && <div className="focus-alert-overlay"><div className="focus-alert-popup" role="alertdialog" aria-modal="true" aria-label="Notification"><span className="eyebrow">New notification</span><h3>Needs your attention</h3><p>{focusAlert}</p><div className="actions"><button type="button" onClick={() => { setSection('activity'); setFocusAlert(''); }}>View activity</button><button type="button" className="secondary" onClick={() => setFocusAlert('')}>Dismiss</button></div></div></div>}
             {session.state === 'ready' && !canOpen && <p className="inline-hint">{sessionExpired ? 'This session window has passed. Create a new session to open check-in.' : 'Check-in can open at the scheduled start time.'}</p>}
             <div className="stat-grid" aria-label="Session attendance summary"><div className="stat"><strong>{presentCount}</strong><span>Present</span></div><div className="stat"><strong>{unrecordedCount}</strong><span>Not recorded</span></div><div className="stat"><strong>{reviewedCount}</strong><span>Pending review</span></div><div className="stat"><strong>{resources.length}</strong><span>Resources</span></div></div>
+            {(exitRequests.length > 0 || pending.length > 0 || privacyRequests.length > 0 || recentFocus.length > 0) && <section className="notification-card" aria-label="Notifications"><div className="section-heading"><div><p className="eyebrow">Notifications</p><h3>{exitRequests.length + pending.length + privacyRequests.length + recentFocus.length} item{exitRequests.length + pending.length + privacyRequests.length + recentFocus.length === 1 ? '' : 's'} need attention</h3></div></div>
+              {exitRequests.map(request => <div className="request-row" key={`request-${request.id}`}><div><strong>{roster.find(person => person.id === request.student_id)?.name ?? `Student ${request.student_id}`}</strong> {request.kind === 'resume' ? 'left the app and needs approval to continue' : 'asks to end focus early'}<small>Asked {date(request.created_at)} · attendance is unchanged</small></div><div className="actions"><button disabled={saving !== null} onClick={() => resolveExit(request, 'approve')}>Approve</button><button className="secondary" disabled={saving !== null} onClick={() => resolveExit(request, 'deny')}>Deny</button></div></div>)}
+              {pending.length > 0 && <div className="request-row"><div><strong>{pending.length} attendance review request{pending.length === 1 ? '' : 's'}</strong><small>Students asked you to confirm attendance</small></div><div className="actions"><button className="secondary" onClick={() => setSection('roster')}>Open roster</button></div></div>}
+              {privacyRequests.length > 0 && <div className="request-row"><div><strong>{privacyRequests.length} student privacy request{privacyRequests.length === 1 ? '' : 's'}</strong><small>Corrections or deletions waiting for your review</small></div><div className="actions"><button className="secondary" onClick={() => setSection('activity')}>Review</button></div></div>}
+              {recentFocus.map(event => <div className="request-row" key={`event-${event.id}`}><div><strong>{roster.find(person => person.id === event.student_id)?.name ?? `Student ${event.student_id}`}</strong> left the app during focus<small>{date(event.recorded_at)} · reason unknown · review only</small></div></div>)}
+            </section>}
             <nav className="section-tabs" aria-label="Session sections">{(['overview', 'roster', 'resources', 'activity'] as const).map(tab => <button key={tab} type="button" className={section === tab ? 'active' : ''} aria-current={section === tab ? 'page' : undefined} onClick={() => setSection(tab)}>{tab === 'overview' ? 'Overview' : tab === 'roster' ? 'Roster' : tab === 'resources' ? 'Resources' : 'Activity'}</button>)}</nav>
             {section === 'overview' && <div className="overview-grid"><div className="overview-main">
               {(session.state === 'active' || session.state === 'checkin_pending') && !sessionExpired ? <div className="qr-panel"><div className="section-heading"><div><p className="eyebrow">Live check-in</p><h3>Scan this QR in class</h3></div><span className="live-dot">Rotates every 20 sec</span></div>{qrImage ? <img src={qrImage} alt="Rotating attendance QR challenge" width="280" height="280"/> : <p role="status">Loading QR…</p>}<p className="hint">Current challenge expires {challenge ? date(challenge.expires_at) : 'soon'}.</p><p className="note">A QR check-in is evidence of participation, not proof of physical presence. Expired codes are not accepted later.</p></div> : <div className="empty-state"><h3>No live QR right now</h3><p>{session.state === 'paused' ? 'The session is paused. Resume it to continue check-in.' : session.state === 'ended' ? 'This session has ended. Attendance records remain available.' : 'Open check-in when this session begins.'}</p></div>}

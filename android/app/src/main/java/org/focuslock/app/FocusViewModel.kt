@@ -24,6 +24,11 @@ data class UiState(
     val resources: List<CourseResource> = emptyList(),
     val focusState: String = "ready",
     val focusSessionId: Int? = null,
+    val exitRequest: String = "none",
+    val resumeLock: String = "none", // none, required, pending, denied
+    val faceQr: FaceQr? = null,
+    val faceMessage: String? = null,
+    val faceRoster: List<FaceRosterEntry> = emptyList(),
     val autoNavigateFocusId: Int? = null,
     val quietRequested: Boolean = false,
     val receiverState: String = "unknown",
@@ -33,6 +38,8 @@ data class UiState(
     val error: String? = null
 )
 
+data class FaceQr(val sessionId: Int, val qr: String)
+
 class FocusViewModel(application: Application) : AndroidViewModel(application) {
     private val api = Api()
     private val identity = DeviceIdentity(application)
@@ -41,7 +48,11 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
     private val pendingPrefs = application.getSharedPreferences("focuslock-pending", android.content.Context.MODE_PRIVATE)
     private val consentPrefs = application.getSharedPreferences("focuslock-consent-withdrawals", android.content.Context.MODE_PRIVATE)
     private val autoFocusPrefs = application.getSharedPreferences("focuslock-auto-focus", android.content.Context.MODE_PRIVATE)
-    private val mutable = MutableStateFlow(UiState(focusSessionId = focus.localSession(), focusState = focus.localSession()?.let { focus.state(focus.localStudentId()!!, it) } ?: "ready"))
+    private fun lockFor(studentId: Int, session: Int?) = if (session != null && focus.resumeLocked(studentId, session)) "required" else "none"
+    private val mutable = MutableStateFlow(UiState(focusSessionId = focus.localSession(), focusState = focus.localSession()?.let { focus.state(focus.localStudentId()!!, it) } ?: "ready",
+        resumeLock = focus.localStudentId()?.let { lockFor(it, focus.localSession()) } ?: "none"))
+    private var faceStatus: FaceStatus? = null
+    private val faceVerifiedAt = HashMap<String, Long>()
     val state = mutable.asStateFlow()
     private var job: Job? = null
 
@@ -54,7 +65,7 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
             catch (error: Exception) {
                 if (error is ApiException && error.statusCode == 401 && mutable.value.student != null) {
                     api.clearToken()
-                    mutable.value = UiState(error = "Your session expired. Please sign in again.")
+                    mutable.value = UiState(authConfig = mutable.value.authConfig, error = "Your session expired. Please sign in again.")
                 } else {
                     mutable.value = mutable.value.copy(error = if (error is java.io.IOException) "Cannot reach FocusLock. Check your connection and try again." else error.message ?: "Something went wrong. Try again.")
                 }
@@ -66,7 +77,7 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         val student = api.signIn(email, password)
         reconcileWithdrawals()
         val focusSession = focus.currentSession(student.id)
-        mutable.value = UiState(student = student, pendingLocal = pendingPrefs.getStringSet("student-${student.id}", emptySet())!!.mapNotNull { it.toIntOrNull() }.toSet(), focusSessionId = focusSession, focusState = focusSession?.let { focus.state(student.id, it) } ?: "ready", quietRequested = QuietMode.requested(quietContext), loading = true)
+        mutable.value = UiState(student = student, authConfig = mutable.value.authConfig, pendingLocal = pendingPrefs.getStringSet("student-${student.id}", emptySet())!!.mapNotNull { it.toIntOrNull() }.toSet(), focusSessionId = focusSession, focusState = focusSession?.let { focus.state(student.id, it) } ?: "ready", quietRequested = QuietMode.requested(quietContext), resumeLock = lockFor(student.id, focusSession), loading = true)
     }
     fun loadAuthConfig() = run { mutable.value = mutable.value.copy(authConfig = api.authConfig()) }
     fun beginCollegeSignIn() {
@@ -83,14 +94,51 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         val focusSession = focus.currentSession(student.id)
         mutable.value = UiState(student = student, authConfig = mutable.value.authConfig,
             pendingLocal = pendingPrefs.getStringSet("student-${student.id}", emptySet())!!.mapNotNull { it.toIntOrNull() }.toSet(),
-            focusSessionId = focusSession, focusState = focusSession?.let { focus.state(student.id, it) } ?: "ready", quietRequested = QuietMode.requested(quietContext), loading = true)
+            focusSessionId = focusSession, focusState = focusSession?.let { focus.state(student.id, it) } ?: "ready", quietRequested = QuietMode.requested(quietContext), resumeLock = lockFor(student.id, focusSession), loading = true)
     }
     private fun acceptedFocus(studentId: Int, sessionId: Int) = autoFocusPrefs.getBoolean("student-$studentId-session-$sessionId", false)
-    fun acceptScannedCheckIn(id: Int, qr: String) = checkIn(id, qr)
+    private fun faceKey(studentId: Int, sessionId: Int) = "$studentId:$sessionId"
+    private fun faceFresh(studentId: Int, sessionId: Int): Boolean {
+        val at = faceVerifiedAt[faceKey(studentId, sessionId)] ?: return false
+        return SystemClock.elapsedRealtime() - at < 120_000L
+    }
+    /** After the disclosure is accepted: the first scan needs a face match when staff recorded the student's face. */
+    fun acceptScannedCheckIn(id: Int, qr: String) = run {
+        val studentId = mutable.value.student?.id ?: error("Sign in required")
+        val status = api.faceStatus().also { faceStatus = it }
+        when {
+            status.mode == "off" || (!status.enrolled && status.mode != "required") -> checkInInternal(id, qr, false)
+            !status.enrolled -> requestReviewInternal(id, "No face record exists for me yet, so I need the teacher to review my attendance")
+            faceFresh(studentId, id) -> checkInInternal(id, qr, true)
+            else -> mutable.value = mutable.value.copy(faceQr = FaceQr(id, qr), faceMessage = null)
+        }
+    }
+    fun faceTemplate(): FloatArray? = faceStatus?.template
+    fun faceMatched(id: Int) {
+        val studentId = mutable.value.student?.id ?: return
+        val waiting = mutable.value.faceQr ?: return
+        faceVerifiedAt[faceKey(studentId, id)] = SystemClock.elapsedRealtime()
+        mutable.value = mutable.value.copy(faceQr = null)
+        run { checkInInternal(id, waiting.qr, true) }
+    }
+    fun faceGaveUp(id: Int, message: String) {
+        mutable.value = mutable.value.copy(faceQr = null)
+        run { requestReviewInternal(id, message) }
+    }
+    fun faceCancelled() { mutable.value = mutable.value.copy(faceQr = null) }
     fun declineScannedCheckIn(id: Int) {
         val student = mutable.value.student ?: return
         autoFocusPrefs.edit().remove("student-${student.id}-session-$id").apply()
         requestReview(id, "I declined the optional focus disclosure after scanning")
+    }
+    fun loadFaceRoster() = run { mutable.value = mutable.value.copy(faceRoster = api.faceRoster()) }
+    fun enrollFace(studentId: Int, template: FloatArray) = run {
+        api.enrollFace(studentId, template)
+        mutable.value = mutable.value.copy(faceRoster = api.faceRoster(), faceMessage = "Face recorded.")
+    }
+    fun deleteFace(studentId: Int) = run {
+        api.deleteFace(studentId)
+        mutable.value = mutable.value.copy(faceRoster = api.faceRoster(), faceMessage = "Face record deleted.")
     }
     fun consumeAutoNavigation() { mutable.value = mutable.value.copy(autoNavigateFocusId = null) }
     fun loadToday() = run {
@@ -111,7 +159,7 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
                 .onFailure { mutable.value = mutable.value.copy(error = "Automatic focus could not start: ${it.message}") }
         } else if (active.isNotEmpty() && QuietMode.optedIn(quietContext) && QuietMode.access(quietContext) && QuietMode.session(quietContext) != active.first().id) {
             runCatching { startQuietInternal(active.first().id) }
-                .onFailure { mutable.value = mutable.value.copy(error = "Quiet mode could not start: ${it.message}") }
+                .onFailure { if (!(it is ApiException && it.statusCode == 409)) mutable.value = mutable.value.copy(error = "Quiet mode could not start: ${it.message}") }
         }
     }
     fun loadHistory() = run { mutable.value = mutable.value.copy(history = api.history(), privacyRequests = api.privacyRequests()) }
@@ -133,7 +181,7 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
                     .onFailure { mutable.value = mutable.value.copy(error = "Automatic focus could not start: ${it.message}") }
             } else if (detail.state == "active" && localState == "ready" && QuietMode.optedIn(quietContext) && QuietMode.access(quietContext) && QuietMode.session(quietContext) != id) {
                 runCatching { startQuietInternal(id) }
-                    .onFailure { mutable.value = mutable.value.copy(error = "Quiet mode could not start: ${it.message}") }
+                    .onFailure { if (!(it is ApiException && it.statusCode == 409)) mutable.value = mutable.value.copy(error = "Quiet mode could not start: ${it.message}") }
             } else if (detail.state == "ended" && QuietMode.session(quietContext) == id) {
                 QuietMode.stop(quietContext)
             }
@@ -174,11 +222,32 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun recordBackgroundInterruption(id: Int) {
         val student = mutable.value.student ?: return
-        if (focus.state(student.id, id) != "active") return
+        val local = focus.state(student.id, id)
+        if (local !in setOf("active", "paused")) return
+        focus.setResumeLock(true)
+        mutable.value = mutable.value.copy(resumeLock = "required")
+        if (local != "active") return
         val policy = focus.token()
         if (policy.isBlank()) return
         viewModelScope.launch {
             runCatching { api.focusEvent(id, UUID.randomUUID().toString(), policy, "backgrounded") }
+        }
+    }
+    fun requestResumeApproval(id: Int) {
+        if (mutable.value.student == null) return
+        viewModelScope.launch {
+            runCatching { api.requestFocusResume(id) }.onSuccess { mutable.value = mutable.value.copy(resumeLock = "pending") }
+        }
+    }
+    fun pollResume(id: Int) {
+        if (mutable.value.student == null || mutable.value.resumeLock != "pending") return
+        viewModelScope.launch {
+            runCatching { api.focusResumeStatus(id) }.onSuccess { status ->
+                when (status) {
+                    "approved" -> { focus.setResumeLock(false); mutable.value = mutable.value.copy(resumeLock = "none") }
+                    "denied" -> mutable.value = mutable.value.copy(resumeLock = "denied")
+                }
+            }
         }
     }
     fun stopQuiet() {
@@ -197,19 +266,19 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         pendingPrefs.edit().putStringSet("student-$studentId", changed.map(Int::toString).toSet()).apply()
         mutable.value = mutable.value.copy(pendingLocal = changed)
     }
-    fun checkIn(id: Int, qr: String) = run {
+    private suspend fun checkInInternal(id: Int, qr: String, face: Boolean) {
         val studentId = mutable.value.student?.id ?: error("Sign in required")
         mutable.value = mutable.value.copy(checkInResult = null)
         try {
             val deviceId = identity.ensureRegistered(api, studentId)
-            val challenge = api.checkInChallenge(deviceId, qr)
-            val signature = identity.signCheckIn(studentId, deviceId, challenge, qr)
-            val result = api.checkIn(deviceId, qr, challenge.id, signature, null)
+            val challenge = api.checkInChallenge(deviceId, qr, face)
+            val signature = identity.signCheckIn(studentId, deviceId, challenge, qr, face)
+            val result = api.checkIn(deviceId, qr, challenge.id, signature, null, face)
             autoFocusPrefs.edit().putBoolean("student-$studentId-session-$id", true).apply()
             savePending(id, false)
             val detail = api.session(id)
             mutable.value = mutable.value.copy(checkInResult = if (result.duplicate) "Attendance was already recorded: ${result.status}." else "Check-in recorded: ${result.status}.", detail = detail)
-            if (detail.state == "active" && acceptedFocus(studentId, id) && focus.state(studentId, id) == "ready")
+            if (detail.state == "active" && acceptedFocus(studentId, id) && focus.state(studentId, id) in setOf("ready", "ended"))
                 runCatching { startFocusInternal(id, true) }
                     .onFailure { mutable.value = mutable.value.copy(error = "Attendance recorded. Focus could not start: ${it.message}") }
         } catch (offline: java.io.IOException) {
@@ -217,7 +286,8 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
             throw offline
         }
     }
-    fun requestReview(id: Int, reason: String) = run {
+    fun requestReview(id: Int, reason: String) = run { requestReviewInternal(id, reason) }
+    private suspend fun requestReviewInternal(id: Int, reason: String) {
         try {
             api.requestReview(id, reason.trim())
             savePending(id, false)
@@ -276,14 +346,37 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
     private fun endLocalSession(id: Int) {
         val studentId = mutable.value.student?.id ?: focus.localStudentId() ?: return
         QuietMode.stop(quietContext)
+        faceVerifiedAt.remove(faceKey(studentId, id)) // rejoining always needs a new face check
         focus.exit(studentId, id)
         stopPresence()
         stopVpnConsent()
-        mutable.value = mutable.value.copy(focusState = "ended", focusSessionId = null, quietRequested = false)
+        focus.setResumeLock(false)
+        mutable.value = mutable.value.copy(focusState = "ended", focusSessionId = null, quietRequested = false, exitRequest = "none", resumeLock = "none")
     }
-    fun exitFocus(id: Int) {
+    // Early exit is only reachable after the server accepted the teacher's current QR or the teacher approved a request.
+    private fun exitFocus(id: Int) {
         endLocalSession(id)
         emitFocus(id, "exited")
+    }
+    fun exitFocusWithQr(id: Int, qr: String) = run {
+        api.focusExitWithQr(id, qr)
+        exitFocus(id)
+    }
+    fun requestFocusExitApproval(id: Int) = run {
+        api.requestFocusExit(id)
+        mutable.value = mutable.value.copy(exitRequest = "pending")
+    }
+    fun clearExitRequest() { mutable.value = mutable.value.copy(exitRequest = "none") }
+    fun pollFocusExit(id: Int) {
+        if (mutable.value.student == null || mutable.value.exitRequest != "pending") return
+        viewModelScope.launch {
+            runCatching { api.focusExitStatus(id) }.onSuccess { status ->
+                when (status) {
+                    "approved" -> exitFocus(id)
+                    "denied" -> mutable.value = mutable.value.copy(exitRequest = "denied")
+                }
+            }
+        }
     }
     fun tickFocus(id: Int) {
         val studentId = mutable.value.student?.id ?: focus.localStudentId() ?: return
@@ -325,6 +418,10 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { reconcileWithdrawals() }
     }
     fun signOut() {
+        if (mutable.value.focusState in setOf("active", "paused")) {
+            mutable.value = mutable.value.copy(error = "Sign out is unavailable while focus is running. End focus first with the teacher's QR or approval.")
+            return
+        }
         QuietMode.stop(quietContext)
         stopPresence()
         stopVpnConsent()
@@ -333,7 +430,8 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
             reconcileWithdrawals()
             try { api.signOut() } catch (_: Exception) { api.clearToken() }
             val localSession = focus.localSession()
-            mutable.value = UiState(focusSessionId = localSession,
+            mutable.value = UiState(authConfig = mutable.value.authConfig, focusSessionId = localSession,
+                resumeLock = focus.localStudentId()?.let { lockFor(it, localSession) } ?: "none",
                 focusState = localSession?.let { focus.state(focus.localStudentId()!!, it) } ?: "ready")
         }
     }

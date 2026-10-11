@@ -26,7 +26,7 @@ object BackgroundNotice {
         val local = FocusLocal(context)
         val student = local.localStudentId() ?: return null
         val session = local.localSession() ?: return null
-        if (local.state(student, session) != "active") return null
+        if (local.state(student, session) !in setOf("active", "paused")) return null
         if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return session
         runCatching {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -38,7 +38,7 @@ object BackgroundNotice {
             manager.notify(ID, Notification.Builder(context, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle("FocusLock is in the background")
-                .setContentText("A focus interruption may be shown to your teacher. Return, Pause or Exit.")
+                .setContentText("Return to FocusLock. Your teacher must approve before you can continue.")
                 .setContentIntent(open).setAutoCancel(true).build())
         }
         return session

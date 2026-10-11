@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Integer, String, UniqueConstraint, Text
+from sqlalchemy import false, Boolean, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Integer, String, UniqueConstraint, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
 
@@ -61,6 +61,7 @@ class Attendance(Base):
     course_id: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(16))
     method: Mapped[str] = mapped_column(String(32), default="teacher_confirmed")
+    face_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     confirmed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -141,6 +142,31 @@ class FocusEvent(Base):
     student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     action: Mapped[str] = mapped_column(String(16))
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class FaceTemplate(Base):
+    """Encrypted 128-number face template recorded by staff; never a photo. Matching happens on the student's phone."""
+    __tablename__ = "face_templates"
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    ciphertext: Mapped[str] = mapped_column(String(1024))
+    model: Mapped[str] = mapped_column(String(32))
+    enrolled_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    enrolled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consent_recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class FocusExitRequest(Base):
+    __tablename__ = "focus_exit_requests"
+    __table_args__ = (CheckConstraint("status IN ('pending', 'approved', 'denied')", name="focus_exit_status"),
+                      CheckConstraint("kind IN ('exit', 'resume')", name="focus_exit_kind"))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"), index=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(8), default="exit", server_default="exit")
+    status: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    resolved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class BleReceiver(Base):
