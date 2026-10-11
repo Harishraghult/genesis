@@ -1,0 +1,20 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "dashboard": {
+      "root": "dashboard/",
+      "framework": "vite"
+    },
+    "api": {
+      "root": "backend/",
+      "entrypoint": "vercel_app:app"
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": { "service": "api" } },
+    { "source": "/(.*)", "destination": { "service": "dashboard" } }
+  ],
+  "crons": [
+    { "path": "/api/internal/retention", "schedule": "0 2 * * *" }
+  ]
+}
