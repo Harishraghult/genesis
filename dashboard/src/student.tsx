@@ -54,7 +54,7 @@ export function StudentApp() {
   }
   const expired = useCallback(() => setAuth(null), []);
   return <div className="student">
-    <header><div className="brand">FocusLock<span>STUDENT</span></div>{auth && <div className="account">{auth.user.name}<button className="secondary" onClick={() => void signOut()}>Sign out</button></div>}</header>
+    <header><div className="brand-row"><img className="brand-logo" src="/logo-64.png" alt="" width="40" height="40"/><div className="brand">FocusLock<span>STUDENT</span></div></div>{auth && <div className="account">{auth.user.name}<button className="secondary" onClick={() => void signOut()}>Sign out</button></div>}</header>
     {enabled && <div className="dev-banner">DEMO · Sample accounts and courses. Do not enter real student data.</div>}
     <main className="student-shell">
       {!auth ? <StudentLogin enabled={enabled} onSignedIn={setAuth}/>

@@ -96,7 +96,7 @@ function App() {
     catch { /* Local credentials are always cleared; server tokens expire after eight hours. */ }
     setAuth(null);
   }
-  return <><header><div className="brand">FocusLock<span>TEACHER WORKSPACE</span></div>{auth && <div className="account">{auth.user.name}<button className="secondary" onClick={signOut}>Sign out</button></div>}</header>
+  return <><header><div className="brand-row"><img className="brand-logo" src="/logo-64.png" alt="" width="40" height="40"/><div className="brand">FocusLock<span>TEACHER WORKSPACE</span></div></div>{auth && <div className="account">{auth.user.name}<button className="secondary" onClick={signOut}>Sign out</button></div>}</header>
     {enabled && <div className="dev-banner">DEMO · Sample accounts and courses. Do not enter real student data.</div>}
     {!auth ? <main className="login"><div><p className="eyebrow">A calmer start to class</p><h1>Attendance with<br/>student choice.</h1><p>Manage your classes and confirm attendance. Students keep control of their personal phones.</p><p className="note">No Bluetooth, VPN or device permissions needed for attendance.</p></div>
       <div className="panel"><h2>Teacher sign-in</h2>{enabled ? <form onSubmit={signIn}><p>Development accounts only</p><label>Email<input type="email" autoComplete="username" required value={email} onChange={e => setEmail(e.target.value)}/></label><label>Demo password<input type="password" autoComplete="current-password" required value={password} onChange={e => setPassword(e.target.value)}/></label><p className="hint">Use the demo password (DEV_PASSWORD). Students: <a href="/student">open the student app</a>.</p><button disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button></form> : <><p>Use your college account.</p><button disabled={!college?.college_oidc || !college.authorization_endpoint || busy} onClick={() => void collegeSignIn()}>Sign in with college</button>{!college?.college_oidc && <p role="status">College authentication needs administrator configuration.</p>}</>}{error && <p className="error" role="alert">{error}</p>}</div></main>
@@ -429,4 +429,5 @@ function Dashboard({ auth }: { auth: Auth }) {
 }
 
 const isStudent = window.location.pathname === '/student' || window.location.pathname.startsWith('/student/');
+document.title = isStudent ? 'FocusLock · Student' : 'FocusLock · Teacher workspace';
 createRoot(document.getElementById('root')!).render(<React.StrictMode>{isStudent ? <StudentApp/> : <App/>}</React.StrictMode>);
