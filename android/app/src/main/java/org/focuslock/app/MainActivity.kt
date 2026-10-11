@@ -378,7 +378,7 @@ fun FocusLock(callbackUri: Uri? = null, clearCallback: () -> Unit = {}, model: F
                     BackHandler(enabled = state.focusState in setOf("active", "paused")) { leaveWarning = true }
                     if (leaveWarning) AlertDialog(onDismissRequest = { leaveWarning = false },
                         title = { Text("Leave focus?") },
-                        text = { Text("Focus is still running. If you leave this screen or the app, your teacher may see a neutral interruption note, and focus does not stop. Tap Quit to end focus; your teacher is notified and attendance is unchanged.") },
+                        text = { Text("Focus is still running. If you leave this screen or the app, your teacher may see a neutral interruption note, and focus does not stop. To quit focus, ask your teacher; attendance is unchanged.") },
                         confirmButton = { TextButton(onClick = { leaveWarning = false }) { Text("Stay focused") } },
                         dismissButton = { TextButton(onClick = { leaveWarning = false; nav.popBackStack() }) { Text("Leave screen anyway") } })
                     if (exitDialog) AlertDialog(onDismissRequest = { exitDialog = false },
@@ -437,9 +437,9 @@ fun FocusLock(callbackUri: Uri? = null, clearCallback: () -> Unit = {}, model: F
                         }
                         if (state.focusState == "active") Button(onClick = { model.pauseFocus(id) }) { Text("Pause") }
                         if (state.focusState == "paused") Button(onClick = { model.resumeFocus(id) }) { Text("Resume") }
-                        if (state.focusState in setOf("active", "paused")) OutlinedButton(onClick = { model.quitFocus(id) }) { Text("Quit") }
+                        if (state.focusState in setOf("active", "paused")) OutlinedButton(onClick = { model.requestFocusExitApproval(id) }, enabled = state.exitRequest != "pending") { Text(if (state.exitRequest == "pending") "Waiting for teacher…" else "Ask teacher to quit") }
                         if (state.exitRequest == "pending") Text("Waiting for your teacher to approve. Focus continues until they respond.", color = MaterialTheme.colorScheme.tertiary)
-                        if (state.exitRequest == "denied") Text("Your teacher did not approve ending focus. You can scan their QR instead.", color = MaterialTheme.colorScheme.error)
+                        if (state.exitRequest == "denied") Text("Your teacher asked you to stay in focus.", color = MaterialTheme.colorScheme.error)
                         if (state.focusState in setOf("active", "paused")) {
                             OutlinedButton(onClick = {
                                 BackgroundNotice.suppressForExpectedExternalActivity()

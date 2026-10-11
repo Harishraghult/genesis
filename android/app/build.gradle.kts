@@ -13,8 +13,11 @@ android {
         applicationId = "org.focuslock.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+        // Optional, e.g. -PABI_FILTERS=arm64-v8a for a smaller phone-only APK; the default stays universal.
+        providers.gradleProperty("ABI_FILTERS").orNull?.split(",")?.map(String::trim)?.filter(String::isNotEmpty)
+            ?.takeIf { it.isNotEmpty() }?.let { ndk { abiFilters += it } }
     }
     buildTypes {
         debug {

@@ -200,6 +200,8 @@ def record_event(session_id: int, body: EventInput, user: User = Depends(current
     payload = verify_policy(body.policy, user.id, session_id, now_utc())
     if payload["cid"] != session.course_id:
         raise HTTPException(422, "Policy course mismatch")
+    if body.action == "exited" and session.state != "ended" and not quit_approved(db, session_id, user.id):
+        raise HTTPException(409, "Ask your teacher to approve quitting focus")
     if body.action == "backgrounded":
         if session.state != "active" or utc(session.ends_at) <= now_utc():
             raise HTTPException(409, "Session is not active")
@@ -228,6 +230,22 @@ def require_new_face_check(db, session_id: int, student_id: int) -> None:
 def exit_view(row):
     return {"id": row.id, "session_id": row.session_id, "student_id": row.student_id, "kind": row.kind,
             "status": row.status, "created_at": utc(row.created_at)}
+
+
+def quit_approved(db, session_id: int, student_id: int) -> bool:
+    """Quitting focus needs the teacher's consent, given after the student last joined focus."""
+    approval = db.scalar(select(FocusExitRequest).where(FocusExitRequest.session_id == session_id,
+                                                        FocusExitRequest.student_id == student_id,
+                                                        FocusExitRequest.kind == "exit",
+                                                        FocusExitRequest.status == "approved")
+                         .order_by(FocusExitRequest.resolved_at.desc()).limit(1))
+    if approval is None or approval.resolved_at is None:
+        return False
+    joined = db.scalar(select(FocusEvent.recorded_at).where(FocusEvent.session_id == session_id,
+                                                           FocusEvent.student_id == student_id,
+                                                           FocusEvent.action == "started")
+                       .order_by(FocusEvent.recorded_at.desc()).limit(1))
+    return joined is None or utc(approval.resolved_at) >= utc(joined)
 
 
 def latest_request(db, session_id: int, student_id: int, kind: str):
@@ -275,6 +293,9 @@ def exit_with_qr(session_id: int, body: ExitQr, user: User = Depends(current_use
             payload["start"] != int(utc(session.started_at).timestamp())):
         raise HTTPException(422, "QR challenge does not match this session")
     require_new_face_check(db, session.id, user.id)
+    now = now_utc()
+    db.add(FocusExitRequest(session_id=session.id, student_id=user.id, kind="exit", status="approved",
+                            created_at=now, resolved_by=None, resolved_at=now))
     db.commit()
     return {"approved": True}
 

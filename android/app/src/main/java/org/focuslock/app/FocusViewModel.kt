@@ -353,10 +353,6 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
     }
     // Early exit is only reachable after the server accepted the teacher's current QR or the teacher approved a request.
     private fun exitFocus(id: Int) {
-        endLocalSession(id)
-        emitFocus(id, "exited")
-    }
-    fun quitFocus(id: Int) {
         emitFocus(id, "exited")
         endLocalSession(id)
     }

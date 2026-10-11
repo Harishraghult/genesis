@@ -141,7 +141,7 @@ def test_early_focus_exit_needs_current_qr_or_teacher_approval(client):
     assert client.post(path, headers=teacher, json={"qr": qr}).status_code == 403
     assert client.post(path, headers=student, json={"qr": qr}).json() == {"approved": True}
 
-    assert client.get("/sessions/1/focus-exit-requests/mine", headers=student).status_code == 404
+    assert client.get("/sessions/1/focus-exit-requests/mine", headers=student).json()["status"] == "approved"  # QR consent is recorded
     created = client.post("/sessions/1/focus-exit-requests", headers=student)
     assert created.status_code == 201 and created.json()["status"] == "pending"
     again = client.post("/sessions/1/focus-exit-requests", headers=student)
@@ -217,3 +217,28 @@ def test_student_can_rescan_and_rejoin_focus_after_quitting(client):
     second = client.get(f"/sessions/1/focus-policy?nonce={uuid4()}", headers=student)
     assert second.status_code == 200 and second.json()["policy"] != first.json()["policy"]
     assert client.get("/sessions/1", headers=student).json()["attendance"]["status"] == "present"
+
+
+def test_quitting_focus_needs_the_teachers_consent(client):
+    teacher = login(client, "teacher@focuslock.test")
+    assert client.post("/sessions/1/start", headers=teacher).status_code == 200
+    assert client.post("/sessions/1/activate", headers=teacher).status_code == 200
+    student = checked_in(client, teacher)
+    policy = client.get(f"/sessions/1/focus-policy?nonce={uuid4()}", headers=student).json()["policy"]
+    event = lambda action: client.post("/sessions/1/focus-events", headers=student, json={"id": str(uuid4()), "policy": policy, "action": action})
+    assert event("started").status_code == 201
+    assert event("paused").status_code == 201  # pausing needs no consent
+    assert event("exited").status_code == 409  # quitting does
+    request = client.post("/sessions/1/focus-exit-requests", headers=student).json()
+    assert event("exited").status_code == 409  # still pending
+    assert client.post(f"/sessions/1/focus-exit-requests/{request['id']}", headers=teacher, json={"decision": "deny"}).status_code == 200
+    assert event("exited").status_code == 409  # denied
+    request = client.post("/sessions/1/focus-exit-requests", headers=student).json()
+    assert client.post(f"/sessions/1/focus-exit-requests/{request['id']}", headers=teacher, json={"decision": "approve"}).status_code == 200
+    assert event("exited").status_code == 201
+    # Rejoining starts a new focus period; quitting again needs a new approval.
+    assert event("started").status_code == 201
+    assert event("exited").status_code == 409
+    # Once the teacher ends class, focus simply ends.
+    assert client.post("/sessions/1/end", headers=teacher).status_code == 200
+    assert event("exited").status_code == 201

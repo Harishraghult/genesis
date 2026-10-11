@@ -13,6 +13,15 @@ type DataRequest = { id: number; session_id: number | null; kind: 'correction' |
 type FocusState = 'off' | 'active' | 'paused' | 'quit' | 'ended';
 
 const STORAGE = 'focuslock-student';
+// Android app download (GitHub Releases). Only the installed app can turn on Do Not Disturb and silence calls.
+export const APP_DOWNLOAD_URL = 'https://github.com/Harishraghult/genesis/releases/latest';
+const isAndroid = /Android/i.test(navigator.userAgent);
+function GetTheApp() {
+  return <div className="get-app">
+    <div><strong>Get the FocusLock app</strong><small>{isAndroid ? 'The Android app can turn on Do Not Disturb and silence calls during class, with your permission.' : 'On Android phones, the app can turn on Do Not Disturb and silence calls during class.'}</small></div>
+    <a className="button" href={APP_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer">Download for Android</a>
+  </div>;
+}
 const isOpen = (s: ClassSession) => s.state === 'checkin_pending' || s.state === 'active';
 const attendanceLabel = (s: ClassSession) => s.attendance ? s.attendance.status.replace(/^./, c => c.toUpperCase()) : s.pending_review ? 'Pending teacher review' : 'Not recorded';
 const attendanceClass = (s: ClassSession) => s.attendance ? s.attendance.status : s.pending_review ? 'pending' : '';
@@ -86,6 +95,7 @@ function StudentLogin({ enabled, onSignedIn }: { enabled: boolean | null; onSign
         <button disabled={busy || enabled === null}>{busy ? 'Signing in…' : 'Sign in'}</button>
       </form>}
     {error && <p className="error" role="alert">{error}</p>}
+    <GetTheApp/>
     <p className="hint">Teacher? <a href="/">Open the teacher workspace</a>.</p>
   </section>;
 }
@@ -182,8 +192,8 @@ function SessionView({ auth, sessionId, onBack, onExpired }: { auth: Auth; sessi
       <p className="eyebrow">Before you check in</p><h3>Voluntary class focus</h3>
       <p>Checking in with the QR also turns on voluntary focus while the class is running.</p>
       <ul>
-        <li>Pause or Quit any time. After quitting, scan the class QR again to join.</li>
-        <li>Leaving this page, or locking your screen, while focus is on sends your teacher a neutral “left the page” note. Quitting focus also notifies your teacher. FocusLock cannot see other apps or why you left.</li>
+        <li>Pause any time. To quit focus, ask your teacher; after they approve, scan the class QR again to rejoin.</li>
+        <li>Leaving this page, or locking your screen, while focus is on sends your teacher a neutral “left the page” note. Quit requests go to your teacher. FocusLock cannot see other apps or why you left.</li>
         <li>Turning on Do Not Disturb is up to you.</li>
         <li>Focus never changes your attendance.</li>
       </ul>
@@ -205,6 +215,7 @@ function FocusPanel({ auth, session }: { auth: Auth; session: ClassSession }) {
   const [scanning, setScanning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [quitRequest, setQuitRequest] = useState<'none' | 'pending' | 'denied'>('none');
   const setState = (next: FocusState) => { stateRef.current = next; setStateRaw(next); persist(); };
 
   const send = useCallback(async (action: string) => {
@@ -237,6 +248,32 @@ function FocusPanel({ auth, session }: { auth: Auth; session: ClassSession }) {
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, [send, session.state]);
 
+  useEffect(() => {
+    if (state !== 'active' && state !== 'paused') return;
+    api<{ status: string }>(`/sessions/${session.id}/focus-exit-requests/mine`, token)
+      .then(r => { if (r.status === 'pending') setQuitRequest('pending'); }).catch(() => undefined);
+  }, [session.id, token]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (quitRequest !== 'pending') return;
+    const timer = setInterval(async () => {
+      try {
+        const latest = await api<{ status: string }>(`/sessions/${session.id}/focus-exit-requests/mine`, token);
+        if (latest.status === 'approved') {
+          setQuitRequest('none');
+          await send('exited').catch(() => undefined);
+          setState('quit');
+        } else if (latest.status === 'denied') setQuitRequest('denied');
+      } catch { /* keep waiting */ }
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [quitRequest, send, session.id, token]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Quitting needs the teacher's consent; focus continues until they decide.
+  async function askToQuit() {
+    setError('');
+    try { await api(`/sessions/${session.id}/focus-exit-requests`, token, { method: 'POST' }); setQuitRequest('pending'); }
+    catch (e) { setError((e as Error).message); }
+  }
+
   async function act(next: FocusState, action: 'paused' | 'resumed' | 'exited') {
     setError(''); setState(next);
     await send(action).catch(() => setError(action === 'exited' ? 'You quit focus on this phone, but your teacher could not be notified. Check your connection.' : 'Saved on this phone. Your teacher may not see this until you are back online.'));
@@ -254,12 +291,14 @@ function FocusPanel({ auth, session }: { auth: Auth; session: ClassSession }) {
     {session.state === 'paused' && (state === 'active' || state === 'paused') && <p className="hint">Your teacher paused the class.</p>}
     {state === 'active' && <p>Stay with the class. Your phone remains yours, and focus never changes your attendance.</p>}
     {state === 'paused' && <p>Paused. Resume whenever you are ready.</p>}
-    {state === 'quit' && <p>Your attendance is unchanged. Scan the class QR again to join focus.</p>}
+    {state === 'quit' && <p>Your teacher approved quitting. Your attendance is unchanged. Scan the class QR again to join focus.</p>}
+    {quitRequest === 'pending' && (state === 'active' || state === 'paused') && <p className="success" role="status">Asked your teacher to let you quit. Focus continues until they decide.</p>}
+    {quitRequest === 'denied' && (state === 'active' || state === 'paused') && <p className="hint">Your teacher asked you to stay in focus.</p>}
     {error && <p className="error" role="alert">{error}</p>}
     <div className="actions">
       {state === 'active' && <button onClick={() => void act('paused', 'paused')}>Pause</button>}
       {state === 'paused' && <button onClick={() => void act('active', 'resumed')}>Resume</button>}
-      {(state === 'active' || state === 'paused') && <button className="secondary" onClick={() => void act('quit', 'exited')}>Quit</button>}
+      {(state === 'active' || state === 'paused') && <button className="secondary" disabled={quitRequest === 'pending'} onClick={() => void askToQuit()}>{quitRequest === 'pending' ? 'Waiting for teacher…' : 'Ask teacher to quit'}</button>}
       {state === 'quit' && live && <button disabled={busy} onClick={() => setScanning(true)}>{busy ? 'Joining…' : 'Join again'}</button>}
     </div>
     {(state === 'active' || state === 'paused') && <DndCard/>}
@@ -276,6 +315,7 @@ function DndCard() {
     <div><strong>Do Not Disturb</strong><small>{on ? 'Marked as on. Remember to turn it off after class.' : 'Silence calls and notifications during class.'}</small></div>
     <div className="actions"><button className={on ? 'secondary' : ''} onClick={toggle}>{on ? 'I turned it off' : 'I turned it on'}</button><button className="secondary" onClick={() => setOpen(o => !o)}>{open ? 'Hide steps' : 'How?'}</button></div>
     {open && <p className="hint">{ios ? 'Swipe down from the top-right corner to open Control Center, tap Focus, then Do Not Disturb.' : 'Swipe down from the top of the screen twice to open Quick Settings, then tap Do Not Disturb.'} Websites cannot switch it on or silence calls for you. The FocusLock Android app can do both automatically if you allow it.</p>}
+    {isAndroid && <GetTheApp/>}
   </div>;
 }
 

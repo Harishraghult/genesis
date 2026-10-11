@@ -181,31 +181,30 @@ function Dashboard({ auth }: { auth: Auth }) {
         if (active) {
           const fresh = seenFocusIds === null ? [] : focus.filter(event => !seenFocusIds!.has(event.id));
           const newlyBackgrounded = fresh.filter(event => event.action === 'backgrounded');
-          const newlyQuit = fresh.filter(event => event.action === 'exited');
           seenFocusIds = new Set(focus.map(event => event.id));
           setAttendance(rows); setPending(requests); setAudit(events); setResources(files); setFocusEvents(focus); setExitRequests(exits);
           const newRequests = seenRequestIds === null ? [] : exits.filter(request => !seenRequestIds!.has(request.id));
           seenRequestIds = new Set(exits.map(request => request.id));
-          if (newRequests.length) {
-            setFocusAlert(`${newRequests.length} student${newRequests.length === 1 ? '' : 's'} need${newRequests.length === 1 ? 's' : ''} your approval: ${newRequests.map(request => request.kind === 'resume' ? 'left the app and wants to continue' : 'asks to end focus early').join(', ')}.`);
-            if (soundEnabled && alertAudio.current?.state === 'running') playAlertTone(alertAudio.current);
-          }
-          if (newlyBackgrounded.length || newlyQuit.length) {
-            const names = (events: FocusEvent[]) => Array.from(new Set(events.map(event => rosterRef.current.find(person => person.id === event.student_id)?.name ?? `Student ${event.student_id}`))).join(', ');
-            const parts = [
-              newlyQuit.length ? `${names(newlyQuit)} quit focus` : '',
-              newlyBackgrounded.length ? `${names(newlyBackgrounded)} left the app or page during focus (reason unknown)` : '',
-            ].filter(Boolean);
-            const quitCount = (studentId: number) => focus.filter(event => event.action === 'exited' && event.student_id === studentId).length;
-            const repeat = Array.from(new Set(newlyQuit.map(event => event.student_id))).filter(id => quitCount(id) >= 2);
-            if (repeat.length) parts.unshift(`Repeated quit: ${repeat.map(id => `${rosterRef.current.find(person => person.id === id)?.name ?? `Student ${id}`} quit focus ${quitCount(id)} times`).join(', ')}`);
-            const message = `${parts.join('. ')}. This is for review only and attendance is unchanged.`;
+          const nameOf = (id: number) => rosterRef.current.find(person => person.id === id)?.name ?? `Student ${id}`;
+          const parts: string[] = [];
+          // Quitting needs the teacher's consent: each request asks for Approve/Deny. A student's second quit request
+          // in this session (earlier approved quits count) sounds the alarm.
+          const quitRequests = newRequests.filter(request => request.kind === 'exit');
+          const timesAsked = (id: number) => focus.filter(event => event.action === 'exited' && event.student_id === id).length + 1;
+          const repeat = Array.from(new Set(quitRequests.map(request => request.student_id))).filter(id => timesAsked(id) >= 2);
+          if (repeat.length) parts.push(`Repeated quit request: ${repeat.map(id => `${nameOf(id)} wants to quit again (already quit ${timesAsked(id) - 1} time${timesAsked(id) - 1 === 1 ? '' : 's'} this class)`).join(', ')}`);
+          if (quitRequests.length) parts.push(`${Array.from(new Set(quitRequests.map(request => nameOf(request.student_id)))).join(', ')} asks to quit focus. Approve or deny below`);
+          const resumeRequests = newRequests.filter(request => request.kind === 'resume');
+          if (resumeRequests.length) parts.push(`${Array.from(new Set(resumeRequests.map(request => nameOf(request.student_id)))).join(', ')} wants to continue focus`);
+          if (newlyBackgrounded.length) parts.push(`${Array.from(new Set(newlyBackgrounded.map(event => nameOf(event.student_id)))).join(', ')} left the app or page during focus (reason unknown, review only)`);
+          if (parts.length) {
+            const message = `${parts.join('. ')}. Attendance is unchanged.`;
             setFocusAlert(message);
-            // A repeated quit always sounds the alarm (browsers allow it after the teacher's first click on the page).
+            // A repeated quit request always sounds the alarm (browsers allow it after the teacher's first click on the page).
             if (repeat.length && alertAudio.current?.state === 'running') playRepeatAlarm(alertAudio.current);
             else if (soundEnabled && alertAudio.current?.state === 'running') playAlertTone(alertAudio.current);
             if (soundEnabled && 'Notification' in window && Notification.permission === 'granted') {
-              try { new Notification('FocusLock · focus update', { body: message, tag: `focuslock-${session.id}` }); } catch { /* In-page alert remains available. */ }
+              try { new Notification('FocusLock · needs your attention', { body: message, tag: `focuslock-${session.id}` }); } catch { /* In-page alert remains available. */ }
             }
           }
         }
@@ -406,7 +405,7 @@ function Dashboard({ auth }: { auth: Auth }) {
             {session.state === 'ready' && !canOpen && <p className="inline-hint">{sessionExpired ? 'This session window has passed. Create a new session to start class.' : 'You can start this session at its scheduled time.'}</p>}
             <div className="stat-grid" aria-label="Session attendance summary"><div className="stat"><strong>{presentCount}</strong><span>Present</span></div><div className="stat"><strong>{unrecordedCount}</strong><span>Not recorded</span></div><div className="stat"><strong>{reviewedCount}</strong><span>Pending review</span></div><div className="stat"><strong>{resources.length}</strong><span>Resources</span></div></div>
             {(exitRequests.length > 0 || pending.length > 0 || privacyRequests.length > 0 || recentFocus.length > 0) && <section className="notification-card" aria-label="Notifications"><div className="section-heading"><div><p className="eyebrow">Notifications</p><h3>{exitRequests.length + pending.length + privacyRequests.length + recentFocus.length} item{exitRequests.length + pending.length + privacyRequests.length + recentFocus.length === 1 ? '' : 's'} need attention</h3></div></div>
-              {exitRequests.map(request => <div className="request-row" key={`request-${request.id}`}><div><strong>{roster.find(person => person.id === request.student_id)?.name ?? `Student ${request.student_id}`}</strong> {request.kind === 'resume' ? 'left the app and needs approval to continue' : 'asks to end focus early'}<small>Asked {date(request.created_at)} · attendance is unchanged</small></div><div className="actions"><button disabled={saving !== null} onClick={() => resolveExit(request, 'approve')}>Approve</button><button className="secondary" disabled={saving !== null} onClick={() => resolveExit(request, 'deny')}>Deny</button></div></div>)}
+              {exitRequests.map(request => <div className="request-row" key={`request-${request.id}`}><div><strong>{roster.find(person => person.id === request.student_id)?.name ?? `Student ${request.student_id}`}</strong> {request.kind === 'resume' ? 'left the app and needs approval to continue' : 'asks to quit focus'}<small>Asked {date(request.created_at)} · attendance is unchanged</small></div><div className="actions"><button disabled={saving !== null} onClick={() => resolveExit(request, 'approve')}>Approve</button><button className="secondary" disabled={saving !== null} onClick={() => resolveExit(request, 'deny')}>Deny</button></div></div>)}
               {pending.length > 0 && <div className="request-row"><div><strong>{pending.length} attendance review request{pending.length === 1 ? '' : 's'}</strong><small>Students asked you to confirm attendance</small></div><div className="actions"><button className="secondary" onClick={() => setSection('roster')}>Open roster</button></div></div>}
               {privacyRequests.length > 0 && <div className="request-row"><div><strong>{privacyRequests.length} student privacy request{privacyRequests.length === 1 ? '' : 's'}</strong><small>Corrections or deletions waiting for your review</small></div><div className="actions"><button className="secondary" onClick={() => setSection('activity')}>Review</button></div></div>}
               {recentFocus.map(event => <div className="request-row" key={`event-${event.id}`}><div><strong>{roster.find(person => person.id === event.student_id)?.name ?? `Student ${event.student_id}`}</strong> {event.action === 'exited' ? 'quit focus' : 'left the app or page during focus'}<small>{date(event.recorded_at)} · {event.action === 'exited' ? 'attendance unchanged' : 'reason unknown · review only'}</small></div></div>)}
