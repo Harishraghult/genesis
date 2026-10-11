@@ -1,0 +1,10 @@
+{
+  "name": "focuslock",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix dashboard install && npm --prefix dashboard run build",
+    "dashboard:build": "npm --prefix dashboard run build",
+    "dashboard:dev": "npm --prefix dashboard run dev"
+  }
+}

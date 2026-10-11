@@ -1,20 +1,21 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "services": {
-    "dashboard": {
-      "root": "dashboard/",
-      "framework": "vite"
-    },
-    "api": {
-      "root": "backend/",
-      "entrypoint": "vercel_app:app"
-    }
-  },
+  "buildCommand": "npm run build",
+  "outputDirectory": "dashboard/dist",
   "rewrites": [
-    { "source": "/api/(.*)", "destination": { "service": "api" } },
-    { "source": "/(.*)", "destination": { "service": "dashboard" } }
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
   ],
   "crons": [
-    { "path": "/api/internal/retention", "schedule": "0 2 * * *" }
+    {
+      "path": "/api/internal/retention",
+      "schedule": "0 2 * * *"
+    }
   ]
 }
