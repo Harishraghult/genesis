@@ -1,7 +1,7 @@
 {
   "name": "FocusLock",
   "short_name": "FocusLock",
-  "description": "Classroom attendance with student choice.",
+  "description": "Smart classroom monitor: QR attendance, face check and focus monitoring.",
   "start_url": "/student",
   "scope": "/",
   "display": "standalone",
