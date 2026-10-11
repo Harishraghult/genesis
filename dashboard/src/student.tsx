@@ -185,7 +185,7 @@ function SessionView({ auth, sessionId, onBack, onExpired }: { auth: Auth; sessi
     <div className="card">
       <h3>Course resources</h3>
       {!resources.length ? <p className="hint">No resources attached to this class.</p> : resources.map(r => <p key={r.id} className="resource-row">
-        <a href={r.url} target="_blank" rel="noopener noreferrer">{r.title}</a><small>{r.kind.toUpperCase()} · {r.downloadable ? 'Offline copy allowed' : 'View only'}</small></p>)}
+        {/^https:\/\//i.test(r.url) ? <a href={r.url} target="_blank" rel="noopener noreferrer">{r.title}</a> : <strong>{r.title} (unavailable: not a secure link)</strong>}<small>{r.kind.toUpperCase()} · {r.downloadable ? 'Offline copy allowed' : 'View only'}</small></p>)}
     </div>
 
     {step === 'disclosure' && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Voluntary focus disclosure"><div className="modal">

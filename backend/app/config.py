@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     face_template_key: str = ""
     face_check_mode: str = "off"  # off | enrolled | required; biometric checks stay opt-in
+    # Decrypted face templates are never sent outside the development demo unless a reviewed deployment opts in.
+    face_template_download: bool = False
 
     @property
     def dev_auth_enabled(self) -> bool:

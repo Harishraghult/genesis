@@ -108,13 +108,21 @@ def student_for(db: Session, staff_user: User, student_id: int) -> User:
     return student
 
 
+def template_download_allowed() -> bool:
+    """Production APIs never return decrypted templates unless explicitly configured (FACE_TEMPLATE_DOWNLOAD=true)."""
+    cfg = settings()
+    return cfg.app_env == "development" or cfg.face_template_download
+
+
 @router.get("/face/templates/me")
 def my_template(user: User = Depends(current_user), db: Session = Depends(get_db)):
     student_only(user)
     current = mode()
     row = db.get(FaceTemplate, user.id) if current != "off" else None
+    release = row is not None and template_download_allowed()
+    # Without the template the app cannot run the on-device check and sends the student to teacher review.
     return {"mode": current, "enrolled": row is not None, "model": row.model if row else None,
-            "template": unseal(user.id, row.ciphertext) if row else None}
+            "template_download": release, "template": unseal(user.id, row.ciphertext) if release else None}
 
 
 @router.get("/face/roster")

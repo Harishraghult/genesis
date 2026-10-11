@@ -8,7 +8,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
-    <application android:usesCleartextTraffic="true" tools:replace="android:usesCleartextTraffic">
+    <application android:usesCleartextTraffic="false" android:networkSecurityConfig="@xml/network_security_config" tools:replace="android:usesCleartextTraffic">
         <service android:name=".FocusVpnService" android:exported="true"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:foregroundServiceType="specialUse">

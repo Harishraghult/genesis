@@ -200,3 +200,16 @@ def test_rejoining_after_quitting_needs_a_new_face_check(client):
     resume = client.post("/sessions/1/focus-resume-requests", headers=student).json()
     assert client.post(f"/sessions/1/focus-exit-requests/{resume['id']}", headers=teacher, json={"decision": "approve"}).status_code == 200
     assert policy() == 200
+
+
+def test_decrypted_templates_are_withheld_in_production_by_default(monkeypatch):
+    from app.config import settings
+    cfg = settings()
+    monkeypatch.setattr(cfg, "app_env", "production")
+    monkeypatch.setattr(cfg, "face_template_download", False)
+    assert face.template_download_allowed() is False
+    monkeypatch.setattr(cfg, "face_template_download", True)  # a reviewed deployment may opt in
+    assert face.template_download_allowed() is True
+    monkeypatch.setattr(cfg, "app_env", "development")
+    monkeypatch.setattr(cfg, "face_template_download", False)
+    assert face.template_download_allowed() is True  # local demo only
