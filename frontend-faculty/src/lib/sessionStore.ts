@@ -124,8 +124,17 @@ export function syncFromDisk() {
           STUDENTS_MAP.set(id, rec);
         }
       }
-      if (Array.isArray(parsed.focus_alerts) && FOCUS_ALERTS.length === 0) {
-        FOCUS_ALERTS.push(...parsed.focus_alerts);
+      if (Array.isArray(parsed.focus_alerts)) {
+        const existingIds = new Set(FOCUS_ALERTS.map((a) => a.id));
+        for (const fa of parsed.focus_alerts) {
+          if (!existingIds.has(fa.id)) {
+            FOCUS_ALERTS.push(fa);
+            existingIds.add(fa.id);
+          }
+        }
+        if (FOCUS_ALERTS.length > 50) {
+          FOCUS_ALERTS.splice(0, FOCUS_ALERTS.length - 50);
+        }
       }
     }
   } catch {}
