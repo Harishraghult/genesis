@@ -25,7 +25,15 @@ export function StudentApp() {
   const [auth, setAuthState] = useState<Auth | null>(loadAuth);
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [view, setView] = useState<'today' | 'history'>('today');
-  const [sessionId, setSessionId] = useState<number | null>(null);
+  // The open class lives in the URL (/student?class=ID) so a refresh keeps the student's place and Back returns to the list.
+  const fromUrl = () => { const id = Number(new URLSearchParams(window.location.search).get('class')); return Number.isInteger(id) && id > 0 ? id : null; };
+  const [sessionId, setSessionIdState] = useState<number | null>(fromUrl);
+  const setSessionId = (id: number | null) => {
+    setSessionIdState(id);
+    const url = id === null ? '/student' : `/student?class=${id}`;
+    if (window.location.pathname + window.location.search !== url) window.history.pushState(null, '', url);
+  };
+  useEffect(() => { const onPop = () => setSessionIdState(fromUrl()); window.addEventListener('popstate', onPop); return () => window.removeEventListener('popstate', onPop); }, []);
   const setAuth = (value: Auth | null) => {
     try { if (value) sessionStorage.setItem(STORAGE, JSON.stringify(value)); else sessionStorage.removeItem(STORAGE); } catch { /* storage blocked: stay signed in for this page only */ }
     setAuthState(value);
@@ -175,7 +183,7 @@ function SessionView({ auth, sessionId, onBack, onExpired }: { auth: Auth; sessi
       <p>Checking in with the QR also turns on voluntary focus while the class is running.</p>
       <ul>
         <li>Pause or Quit any time. After quitting, scan the class QR again to join.</li>
-        <li>Leaving this page with the screen on sends your teacher a neutral “left the page” note. FocusLock cannot see other apps or why you left.</li>
+        <li>Leaving this page, or locking your screen, while focus is on sends your teacher a neutral “left the page” note. Quitting focus also notifies your teacher. FocusLock cannot see other apps or why you left.</li>
         <li>Turning on Do Not Disturb is up to you.</li>
         <li>Focus never changes your attendance.</li>
       </ul>
@@ -187,20 +195,24 @@ function SessionView({ auth, sessionId, onBack, onExpired }: { auth: Auth; sessi
 
 function FocusPanel({ auth, session }: { auth: Auth; session: ClassSession }) {
   const token = auth.access_token;
-  const key = `focuslock-focus-${auth.user.id}-${session.id}`;
-  const [state, setStateRaw] = useState<FocusState>(() => { try { return (sessionStorage.getItem(key) as FocusState | null) ?? 'off'; } catch { return 'off'; } });
+  const key = `focuslock-focus-${auth.user.id}-${session.id}-${session.starts_at}`;
+  const saved = (() => { try { return JSON.parse(sessionStorage.getItem(key) ?? 'null') as { state: FocusState; policy: { token: string; exp: number } | null } | null; } catch { return null; } })();
+  const [state, setStateRaw] = useState<FocusState>(saved?.state ?? 'off');
   const stateRef = useRef(state);
-  const policy = useRef<{ token: string; exp: number } | null>(null);
+  // Kept so Pause/Quit can still be reported while the teacher has paused class (no new policy is issued then).
+  const policy = useRef<{ token: string; exp: number } | null>(saved?.policy ?? null);
+  const persist = () => { try { sessionStorage.setItem(key, JSON.stringify({ state: stateRef.current, policy: policy.current })); } catch { /* best effort */ } };
   const [scanning, setScanning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const setState = (next: FocusState) => { stateRef.current = next; setStateRaw(next); try { sessionStorage.setItem(key, next); } catch { /* best effort */ } };
+  const setState = (next: FocusState) => { stateRef.current = next; setStateRaw(next); persist(); };
 
   const send = useCallback(async (action: string) => {
     const fresh = async () => {
       const result = await api<{ policy: string }>(`/sessions/${session.id}/focus-policy?nonce=${crypto.randomUUID()}`, token);
       const payload = JSON.parse(atob(result.policy.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))) as { exp: number };
       policy.current = { token: result.policy, exp: payload.exp };
+      persist();
     };
     if (!policy.current || policy.current.exp * 1000 <= Date.now() + 5000) await fresh();
     const post = () => api(`/sessions/${session.id}/focus-events`, token, { method: 'POST', body: JSON.stringify({ id: crypto.randomUUID(), policy: policy.current!.token, action }) });
@@ -227,7 +239,7 @@ function FocusPanel({ auth, session }: { auth: Auth; session: ClassSession }) {
 
   async function act(next: FocusState, action: 'paused' | 'resumed' | 'exited') {
     setError(''); setState(next);
-    await send(action).catch(() => setError('Saved on this phone. Your teacher may not see this until you are back online.'));
+    await send(action).catch(() => setError(action === 'exited' ? 'You quit focus on this phone, but your teacher could not be notified. Check your connection.' : 'Saved on this phone. Your teacher may not see this until you are back online.'));
   }
   async function rejoin(qr: string) {
     setScanning(false); setBusy(true); setError('');
@@ -239,6 +251,7 @@ function FocusPanel({ auth, session }: { auth: Auth; session: ClassSession }) {
   return <div className={`card focus focus-${state}`}>
     <p className="eyebrow">Voluntary focus</p>
     <h3>{state === 'active' ? 'Focus is on' : state === 'paused' ? 'Focus paused' : state === 'quit' ? 'You quit focus' : state === 'ended' ? 'Class ended' : 'Starts when your teacher starts class'}</h3>
+    {session.state === 'paused' && (state === 'active' || state === 'paused') && <p className="hint">Your teacher paused the class.</p>}
     {state === 'active' && <p>Stay with the class. Your phone remains yours, and focus never changes your attendance.</p>}
     {state === 'paused' && <p>Paused. Resume whenever you are ready.</p>}
     {state === 'quit' && <p>Your attendance is unchanged. Scan the class QR again to join focus.</p>}
@@ -260,9 +273,9 @@ function DndCard() {
   const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent);
   const toggle = () => { const next = !on; setOn(next); try { sessionStorage.setItem('focuslock-dnd', next ? 'on' : 'off'); } catch { /* best effort */ } };
   return <div className="dnd">
-    <div><strong>Do Not Disturb</strong><small>{on ? 'Marked as on. Remember to turn it off after class.' : 'Silence notifications during class.'}</small></div>
+    <div><strong>Do Not Disturb</strong><small>{on ? 'Marked as on. Remember to turn it off after class.' : 'Silence calls and notifications during class.'}</small></div>
     <div className="actions"><button className={on ? 'secondary' : ''} onClick={toggle}>{on ? 'I turned it off' : 'I turned it on'}</button><button className="secondary" onClick={() => setOpen(o => !o)}>{open ? 'Hide steps' : 'How?'}</button></div>
-    {open && <p className="hint">{ios ? 'Swipe down from the top-right corner to open Control Center, tap Focus, then Do Not Disturb.' : 'Swipe down from the top of the screen twice to open Quick Settings, then tap Do Not Disturb.'} Websites cannot switch it on for you. The FocusLock Android app can turn it on automatically if you allow it.</p>}
+    {open && <p className="hint">{ios ? 'Swipe down from the top-right corner to open Control Center, tap Focus, then Do Not Disturb.' : 'Swipe down from the top of the screen twice to open Quick Settings, then tap Do Not Disturb.'} Websites cannot switch it on or silence calls for you. The FocusLock Android app can do both automatically if you allow it.</p>}
   </div>;
 }
 

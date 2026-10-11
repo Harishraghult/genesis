@@ -20,6 +20,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.service.notification.Condition
+import android.service.notification.ZenPolicy
 
 /** Manages only FocusLock's own DND rule; other user/system DND rules are untouched. */
 object QuietMode {
@@ -72,26 +73,47 @@ object QuietMode {
         }
     }
 
+    /**
+     * Class policy: incoming calls and messages stay silent; alarms and media still play. Repeat callers
+     * (the same person calling twice within 15 minutes) still ring so a genuine emergency can get through.
+     */
+    private fun classPolicy(): ZenPolicy = ZenPolicy.Builder()
+        .allowCalls(ZenPolicy.PEOPLE_TYPE_NONE)
+        .allowRepeatCallers(true)
+        .allowMessages(ZenPolicy.PEOPLE_TYPE_NONE)
+        .allowAlarms(true)
+        .allowMedia(true)
+        .allowSystem(false)
+        .allowReminders(false)
+        .allowEvents(false)
+        .apply { if (Build.VERSION.SDK_INT >= 30) allowConversations(ZenPolicy.CONVERSATION_SENDERS_NONE) }
+        .build()
+
+    private fun classRule(context: Context): AutomaticZenRule = if (Build.VERSION.SDK_INT >= 35) {
+        AutomaticZenRule.Builder("FocusLock class session", conditionId(context))
+            .setConfigurationActivity(ComponentName(context, MainActivity::class.java))
+            .setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
+            .setZenPolicy(classPolicy())
+            .setTriggerDescription("While a student-approved class session is active")
+            .build()
+    } else {
+        AutomaticZenRule("FocusLock class session", null,
+            ComponentName(context, MainActivity::class.java), conditionId(context), classPolicy(),
+            NotificationManager.INTERRUPTION_FILTER_PRIORITY, true)
+    }
+
     fun activateRule(context: Context) {
         require(live(context) && access(context))
         val notificationManager = manager(context)
         val saved = prefs(context)
         var id = saved.getString(RULE, null)
         if (id == null || !notificationManager.automaticZenRules.containsKey(id)) {
-            val rule = if (Build.VERSION.SDK_INT >= 35) {
-                AutomaticZenRule.Builder("FocusLock class session", conditionId(context))
-                    .setConfigurationActivity(ComponentName(context, MainActivity::class.java))
-                    .setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
-                    .setTriggerDescription("While a student-approved class session is active")
-                    .build()
-            } else {
-                AutomaticZenRule("FocusLock class session", null,
-                    ComponentName(context, MainActivity::class.java), conditionId(context), null,
-                    NotificationManager.INTERRUPTION_FILTER_PRIORITY, true)
-            }
-            id = notificationManager.addAutomaticZenRule(rule)
+            id = notificationManager.addAutomaticZenRule(classRule(context))
             require(!id.isNullOrBlank()) { "Android could not create the FocusLock DND rule" }
             saved.edit().putString(RULE, id).apply()
+        } else {
+            // Rules created by older versions had no call policy; bring them up to date.
+            runCatching { notificationManager.updateAutomaticZenRule(id, classRule(context)) }
         }
         notificationManager.setAutomaticZenRuleState(id!!,
             Condition(conditionId(context), "FocusLock class session", Condition.STATE_TRUE))

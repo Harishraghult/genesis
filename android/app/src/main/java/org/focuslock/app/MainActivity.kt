@@ -189,7 +189,7 @@ fun FocusLock(callbackUri: Uri? = null, clearCallback: () -> Unit = {}, model: F
                     }
                     if (quietDisclosure) AlertDialog(onDismissRequest = { quietDisclosure = false },
                         title = { Text("Automatic Do Not Disturb") },
-                        text = { Text("When you open an active session, or FocusLock detects one while open, its own DND rule can start automatically. Android controls call and message exceptions; review them before enabling. Stop DND any time in the app or its notification. Attendance is unaffected.") },
+                        text = { Text("When you join an active class, FocusLock turns on its own Do Not Disturb rule. Incoming calls and messages stay silent during class; if the same person calls twice within 15 minutes the call rings, so an emergency can still reach you. Alarms and media still play. You can still make calls, and you can stop it any time in the app or its notification. Attendance is unaffected.") },
                         confirmButton = { TextButton(onClick = {
                             quietDisclosure = false
                             if (!QuietMode.supported()) quietMessage = "Automatic DND needs Android 10 or newer."
@@ -235,9 +235,15 @@ fun FocusLock(callbackUri: Uri? = null, clearCallback: () -> Unit = {}, model: F
                     LaunchedEffect(id) {
                         while (true) { delay(1000); model.refreshQuietStatus() }
                     }
+                    var quietOffered by rememberSaveable(id) { mutableStateOf(false) }
+                    LaunchedEffect(state.detail?.status, state.detail?.state) {
+                        val detail = state.detail
+                        if (!quietOffered && detail?.id == id && detail.status == "present" && detail.state == "active" &&
+                            QuietMode.supported() && !QuietMode.optedIn(context)) { quietOffered = true; quietDisclosure = true }
+                    }
                     if (quietDisclosure) AlertDialog(onDismissRequest = { quietDisclosure = false },
                         title = { Text("Automatic quiet mode for class") },
-                        text = { Text("After you allow Do Not Disturb access once, FocusLock will turn on its own DND rule when you enter an active class session. It quiets notifications until the signed session timer expires, the session ends, or you tap Stop. Android may silence calls or messages depending on your DND exceptions; check those settings before enabling. You can always use your phone, dialer and messages, and stop quiet mode in the app or notification. Attendance and voluntary focus are unchanged if you decline.") },
+                        text = { Text("Allow Do Not Disturb access once and FocusLock will turn on its own DND rule whenever you join an active class. Incoming calls and messages stay silent during class; if the same person calls twice within 15 minutes the call rings, so an emergency can still reach you. Alarms and media still play. It turns off when the class ends, when you quit focus or when you tap Stop. You can always make calls and use your phone. Attendance is unchanged if you decline.") },
                         confirmButton = { TextButton(onClick = {
                             quietDisclosure = false
                             if (!QuietMode.supported()) quietMessage = "Automatic quiet mode needs Android 10 or newer."
@@ -257,7 +263,7 @@ fun FocusLock(callbackUri: Uri? = null, clearCallback: () -> Unit = {}, model: F
                             if (session.state == "active") item {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Text("Quiet notifications", style = MaterialTheme.typography.titleLarge)
-                                    Text(if (state.quietRequested) "FocusLock quiet mode is requested for this session. Android DND exceptions control which calls and messages alert you." else "Optional: automatically turn on Do Not Disturb when you enter an active session.")
+                                    Text(if (state.quietRequested) "Do Not Disturb is on for this class. Calls and messages are silenced; repeat callers still ring." else "Optional: silence calls and notifications automatically while you are in class.")
                                     if (state.quietRequested) OutlinedButton(onClick = model::stopQuiet) { Text("Stop quiet mode now") }
                                     else Button(onClick = { quietDisclosure = true }) { Text("Set up automatic quiet mode") }
                                     if (quietMessage.isNotBlank()) Text(quietMessage)
@@ -372,7 +378,7 @@ fun FocusLock(callbackUri: Uri? = null, clearCallback: () -> Unit = {}, model: F
                     BackHandler(enabled = state.focusState in setOf("active", "paused")) { leaveWarning = true }
                     if (leaveWarning) AlertDialog(onDismissRequest = { leaveWarning = false },
                         title = { Text("Leave focus?") },
-                        text = { Text("Focus is still running. If you leave this screen or the app, your teacher may see an interruption flag, and focus does not stop. To end focus early you need your teacher's QR code or approval.") },
+                        text = { Text("Focus is still running. If you leave this screen or the app, your teacher may see a neutral interruption note, and focus does not stop. Tap Quit to end focus; your teacher is notified and attendance is unchanged.") },
                         confirmButton = { TextButton(onClick = { leaveWarning = false }) { Text("Stay focused") } },
                         dismissButton = { TextButton(onClick = { leaveWarning = false; nav.popBackStack() }) { Text("Leave screen anyway") } })
                     if (exitDialog) AlertDialog(onDismissRequest = { exitDialog = false },
@@ -427,11 +433,11 @@ fun FocusLock(callbackUri: Uri? = null, clearCallback: () -> Unit = {}, model: F
                         if (state.focusState == "ready" || state.focusState == "ended") {
                             if (classState == "ended") Text("This session has ended. Focus cannot be started or rejoined.", color = MaterialTheme.colorScheme.tertiary)
                             else Text("Focus starts by itself after you scan the teacher's QR and pass the face check, once the class is active. There is no way to start it without both.", color = MaterialTheme.colorScheme.tertiary)
-                            if (state.student != null && classState != "ended") Button(onClick = { model.prepareScan(); nav.navigate("scan/$id") }) { Text(if (state.focusState == "ended") "Scan QR to rejoin focus" else "Scan QR to join focus") }
+                            if (state.student != null && classState != "ended") Button(onClick = { model.prepareScan(); nav.navigate("scan/$id") }) { Text(if (state.focusState == "ended") "Join again (scan QR)" else "Scan QR to join focus") }
                         }
-                        if (state.focusState == "active") Button(onClick = { model.pauseFocus(id) }) { Text("Pause now") }
+                        if (state.focusState == "active") Button(onClick = { model.pauseFocus(id) }) { Text("Pause") }
                         if (state.focusState == "paused") Button(onClick = { model.resumeFocus(id) }) { Text("Resume") }
-                        if (state.focusState in setOf("active", "paused")) OutlinedButton(onClick = { exitDialog = true }, enabled = state.exitRequest != "pending") { Text("Exit focus now") }
+                        if (state.focusState in setOf("active", "paused")) OutlinedButton(onClick = { model.quitFocus(id) }) { Text("Quit") }
                         if (state.exitRequest == "pending") Text("Waiting for your teacher to approve. Focus continues until they respond.", color = MaterialTheme.colorScheme.tertiary)
                         if (state.exitRequest == "denied") Text("Your teacher did not approve ending focus. You can scan their QR instead.", color = MaterialTheme.colorScheme.error)
                         if (state.focusState in setOf("active", "paused")) {

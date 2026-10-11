@@ -50,3 +50,4 @@ header{min-height:76px;padding:15px max(4%,calc((100vw - 1400px)/2));background:
 .student footer{padding-bottom:80px}
 .student .actions button{text-transform:none}.student .card:hover{filter:none}.student .class-card:hover{border-color:#77a185}
 .focus-quit{border-color:#c9d3cc;background:#f7f8f6}.dnd{border-top:1px solid #e3ebe4;margin-top:16px;padding-top:14px}.dnd strong{display:block}
+.focus-chip{white-space:nowrap;display:inline-block;border-radius:20px;padding:5px 10px;font-size:11px;background:#eff1ee;color:#556860}.focus-chip-started,.focus-chip-resumed{background:#e0f0e4;color:#235e32}.focus-chip-paused{background:#fff1d8;color:#795b29}.focus-chip-exited,.focus-chip-backgrounded{background:#fbe8e4;color:#903e2e}

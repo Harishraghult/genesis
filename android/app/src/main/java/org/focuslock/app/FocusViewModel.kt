@@ -224,8 +224,6 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         val student = mutable.value.student ?: return
         val local = focus.state(student.id, id)
         if (local !in setOf("active", "paused")) return
-        focus.setResumeLock(true)
-        mutable.value = mutable.value.copy(resumeLock = "required")
         if (local != "active") return
         val policy = focus.token()
         if (policy.isBlank()) return
@@ -357,6 +355,10 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
     private fun exitFocus(id: Int) {
         endLocalSession(id)
         emitFocus(id, "exited")
+    }
+    fun quitFocus(id: Int) {
+        emitFocus(id, "exited")
+        endLocalSession(id)
     }
     fun exitFocusWithQr(id: Int, qr: String) = run {
         api.focusExitWithQr(id, qr)
