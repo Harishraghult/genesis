@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     database_url: str = ""
+    mock_data: bool = False  # demo only: seeded throwaway SQLite when DATABASE_URL is unset
     app_env: str = "production"
     enable_dev_auth: bool = False
     dev_password: str = ""

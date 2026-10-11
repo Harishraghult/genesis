@@ -40,6 +40,7 @@ $env:DEV_RECEIVER_TOKEN = "local-receiver-token"
 $env:RESOURCE_ALLOWED_HOSTS = "college.example.edu,docs.college.example.edu"
 alembic upgrade head
 python -m app.seed
+# Or skip the two lines above with mock data, rebuilt on every start: $env:MOCK_DATA = "true"
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 

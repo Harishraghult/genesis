@@ -1,0 +1,8 @@
+android/
+backend/tests/
+backend/.venv/
+**/__pycache__/
+docs/*.png
+frontend-faculty/
+frontend-student/
+app-debug.zip

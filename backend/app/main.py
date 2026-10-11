@@ -8,7 +8,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.orm import Session
 from .auth import bearer, current_user, digest, teacher, utc
 from .config import settings
-from .db import get_db
+from .db import SCHEMA_REVISION, get_db
 from .models import AdminAudit, Attendance, AttendanceEvent, ClassSession, CourseOffering, DevToken, Enrollment, PendingAttendance, User
 
 app = FastAPI(title="FocusLock", version="0.6.0")
@@ -88,7 +88,7 @@ def live():
 def ready(db: Session = Depends(get_db)):
     try:
         revision = db.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        if revision != "0009":
+        if revision != SCHEMA_REVISION:
             raise ValueError("Schema revision mismatch")
         cfg = settings()
         if cfg.app_env == "production" and (not cfg.oidc_clients_configured or
@@ -271,3 +271,7 @@ from .stage6 import router as stage6_router  # noqa: E402
 app.include_router(stage6_router)
 from .face import router as face_router  # noqa: E402
 app.include_router(face_router)
+
+if settings().mock_data and not settings().database_url:
+    from .mock_data import init_mock_data  # noqa: E402
+    init_mock_data()

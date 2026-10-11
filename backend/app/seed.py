@@ -1,4 +1,4 @@
-"""Explicit demo fixtures, never invoked by application import or production startup."""
+"""Explicit demo fixtures, never invoked by production startup (only by the opt-in MOCK_DATA demo mode)."""
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, text
 from .config import settings
