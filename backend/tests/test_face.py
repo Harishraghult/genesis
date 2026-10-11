@@ -1,8 +1,22 @@
 import math
 
+import pytest
+
 from app import face
+from app.config import Settings
 from app.models import FaceTemplate
 from conftest import login
+
+
+@pytest.fixture(autouse=True)
+def enrolled_face_mode(monkeypatch):
+    # Face checks are opt-in; these tests exercise the opted-in "enrolled" deployment.
+    monkeypatch.setenv("FACE_CHECK_MODE", "enrolled")
+
+
+def test_biometric_checks_are_off_by_default(monkeypatch):
+    monkeypatch.delenv("FACE_CHECK_MODE", raising=False)
+    assert Settings(_env_file=None).face_check_mode == "off"
 
 
 def unit(seed: int):

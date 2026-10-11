@@ -1,0 +1,13 @@
+# Secret scanning for CI. Development placeholders in examples, tests and CI env are intentionally public.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented development-only placeholders"
+paths = [
+  '''^\.env(\.[a-z-]+)?\.example$''',
+  '''^backend/tests/''',
+  '''^backend/conftest\.py$''',
+  '''^\.github/workflows/''',
+  '''^docs/''',
+]

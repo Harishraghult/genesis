@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.view.WindowManager
 import android.content.pm.PackageManager
 import android.app.Activity
 import android.Manifest
@@ -69,6 +70,8 @@ class MainActivity : ComponentActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Session, QR and attendance content is sensitive: block screenshots, recordings and recents previews.
+        window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         QuietMode.reconcile(this)
         callbackUri = intent?.data
         setContent {

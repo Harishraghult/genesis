@@ -8,7 +8,7 @@
 4. **If it fails three times, the camera is unavailable, or the student prefers it,** the app sends a teacher review request instead. Nobody is marked absent automatically.
 5. The signed check-in includes a `face-match-v1` claim. The server refuses a QR check-in from a student with a recorded face unless the claim is present, and the device signature covers the claim.
 
-`FACE_CHECK_MODE`: `off`, `enrolled` (default: only students with a recorded face), or `required` (students without a record go to teacher review).
+`FACE_CHECK_MODE`: `off` (default), `enrolled` (only students with a recorded face), or `required` (students without a record go to teacher review).
 
 ## Focus starts only after QR and face
 

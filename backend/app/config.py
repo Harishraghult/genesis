@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     retention_credential_days: int = 1
     cors_origins: str = "http://localhost:5173"
     face_template_key: str = ""
-    face_check_mode: str = "enrolled"  # off | enrolled | required
+    face_check_mode: str = "off"  # off | enrolled | required; biometric checks stay opt-in
 
     @property
     def dev_auth_enabled(self) -> bool:
