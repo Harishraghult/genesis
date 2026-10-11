@@ -1,0 +1,33 @@
+# Render Blueprint: New > Blueprint > pick this repo. Demo only: mock data, demo accounts, no real student data.
+services:
+  - type: web
+    name: focuslock
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile.render
+    dockerContext: .
+    healthCheckPath: /api/health/ready
+    autoDeploy: true
+    envVars:
+      # Throwaway SQLite demo database, rebuilt and reseeded whenever the service starts or wakes from sleep.
+      - key: MOCK_DATA
+        value: "true"
+      - key: APP_ENV
+        value: development
+      - key: ENABLE_DEV_AUTH
+        value: "true"
+      # Render asks you to enter this when you create the Blueprint; it is the demo accounts' password.
+      - key: DEV_PASSWORD
+        sync: false
+      - key: QR_SIGNING_KEY
+        generateValue: true
+      - key: POLICY_SIGNING_KEY
+        generateValue: true
+      - key: BLE_TOKEN_KEY
+        generateValue: true
+      - key: RESOURCE_ALLOWED_HOSTS
+        value: college.example.edu
+      - key: FACE_CHECK_MODE
+        value: "off"
+      - key: PLAY_INTEGRITY_MODE
+        value: "off"

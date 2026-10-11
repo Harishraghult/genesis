@@ -20,6 +20,10 @@ Teachers start a session, show the rotating QR, view check-ins, attach college-a
 
 Voluntary focus can only start after a completed QR check-in; the server refuses a focus policy otherwise and the app has no manual Start button. Face checks are **off by default** (`FACE_CHECK_MODE=off`). Only if an institution opts in with `enrolled` or `required` does a student whose face staff recorded need to pass an on-device face check (blink plus match) before check-in; failures go to teacher review. Staff record faces in the Android app with their own teacher or admin account. Leaving the app during focus locks it until the teacher approves, and every request or alert appears in the dashboard's Notifications card. These are evidence for the teacher, not proof of identity. See [Face verification](docs/FACE_VERIFICATION.md) for limits, the model licence and the privacy checklist.
 
+## Hosted demo
+
+For a quick hosted demo with mock data and no database, deploy the [Render Blueprint](docs/RENDER_DEPLOYMENT.md) (`render.yaml`). It is for demos only, never real student data.
+
 ## Production integration
 
 The application is **not live-deployed**. The user selected Vercel as the cloud target and signed in to an account, but confirmed that managed PostgreSQL and college OIDC details are not ready. [`vercel.json`](vercel.json) prepares a same-origin dashboard and FastAPI service at `/api` plus a daily retention invocation; PostgreSQL must come from a managed provider. Vercel Services is in beta, and this configuration has not been deployed. See [Vercel deployment](docs/VERCEL_DEPLOYMENT.md) for secrets, migration, college OIDC and validation steps. `.env.production.example` is a template; never store filled secrets in Git. Production dev login is disabled and `/health/ready` fails closed until OIDC clients and signing secrets are configured. No real OIDC issuer, Play Integrity project, managed database, or Google Play review was available here, so those external integrations are not claimed as validated.

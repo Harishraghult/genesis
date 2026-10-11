@@ -1,0 +1,16 @@
+.git
+.env
+.env.local
+.vercel
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/*.db
+android/
+backend/tests/
+dashboard/dist/
+docs/
+frontend-faculty/
+frontend-student/
+app-debug.zip
