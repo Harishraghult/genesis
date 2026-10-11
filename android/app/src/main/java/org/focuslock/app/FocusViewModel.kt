@@ -26,6 +26,9 @@ data class UiState(
     val focusSessionId: Int? = null,
     val exitRequest: String = "none",
     val resumeLock: String = "none", // none, required, pending, denied
+    val rejoin: String = "none", // after an approved quit: none, pending, approved, denied
+    val notice: String? = null,
+    val leftToList: Boolean = false,
     val faceQr: FaceQr? = null,
     val faceMessage: String? = null,
     val faceRoster: List<FaceRosterEntry> = emptyList(),
@@ -232,8 +235,9 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
     fun recordBackgroundInterruption(id: Int) {
         val student = mutable.value.student ?: return
         val local = focus.state(student.id, id)
-        if (local !in setOf("active", "paused")) return
         if (local != "active") return
+        focus.setResumeLock(true)
+        mutable.value = mutable.value.copy(resumeLock = "required")
         val policy = focus.token()
         if (policy.isBlank()) return
         viewModelScope.launch {
@@ -251,7 +255,11 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching { api.focusResumeStatus(id) }.onSuccess { status ->
                 when (status) {
-                    "approved" -> { focus.setResumeLock(false); mutable.value = mutable.value.copy(resumeLock = "none") }
+                    "approved" -> {
+                        focus.setResumeLock(false)
+                        mutable.value = mutable.value.copy(resumeLock = "none")
+                        if (mutable.value.focusState == "active") emitFocus(id, "resumed")
+                    }
                     "denied" -> mutable.value = mutable.value.copy(resumeLock = "denied")
                 }
             }
@@ -310,7 +318,7 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         val nonce = UUID.randomUUID().toString()
         val policy = api.focusPolicy(id, nonce)
         focus.start(studentId, id, policy, nonce, requestStart)
-        mutable.value = mutable.value.copy(focusState = "active", focusSessionId = id,
+        mutable.value = mutable.value.copy(focusState = "active", focusSessionId = id, rejoin = "none", notice = null,
             autoNavigateFocusId = if (automatic) id else null)
         emitFocus(id, "started")
         if (QuietMode.optedIn(quietContext) && QuietMode.access(quietContext)) {
@@ -379,8 +387,34 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching { api.focusExitStatus(id) }.onSuccess { status ->
                 when (status) {
-                    "approved" -> exitFocus(id)
+                    "approved" -> {
+                        exitFocus(id)
+                        mutable.value = mutable.value.copy(rejoin = "none", leftToList = true,
+                            notice = "Your teacher let you leave focus. Attendance is unchanged; to rejoin, open the class and ask your teacher.")
+                    }
                     "denied" -> mutable.value = mutable.value.copy(exitRequest = "denied")
+                }
+            }
+        }
+    }
+    fun clearLeftToList() { mutable.value = mutable.value.copy(leftToList = false) }
+    fun clearNotice() { mutable.value = mutable.value.copy(notice = null) }
+    /** Rejoining after an allowed quit needs the teacher's approval before the QR scan. */
+    fun requestRejoin(id: Int) {
+        if (mutable.value.student == null) return
+        viewModelScope.launch {
+            runCatching { api.requestFocusResume(id) }
+                .onSuccess { mutable.value = mutable.value.copy(rejoin = "pending") }
+                .onFailure { mutable.value = mutable.value.copy(error = it.message) }
+        }
+    }
+    fun pollRejoin(id: Int) {
+        if (mutable.value.student == null || mutable.value.rejoin != "pending") return
+        viewModelScope.launch {
+            runCatching { api.focusResumeStatus(id) }.onSuccess { status ->
+                when (status) {
+                    "approved" -> mutable.value = mutable.value.copy(rejoin = "approved")
+                    "denied" -> mutable.value = mutable.value.copy(rejoin = "denied")
                 }
             }
         }

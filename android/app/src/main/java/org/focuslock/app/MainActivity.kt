@@ -162,9 +162,14 @@ fun FocusLock(callbackUri: Uri? = null, clearCallback: () -> Unit = {}, model: F
                 Text("FocusLock", style = MaterialTheme.typography.headlineSmall)
                 if (state.student != null && state.focusState !in setOf("active", "paused")) TextButton(onClick = model::signOut) { Text("Sign out") }
             }
-            if (state.authConfig?.developmentLogin == true) Text("LOCAL DEMO · Sample data only", style = MaterialTheme.typography.labelSmall)
+            if (state.authConfig?.developmentLogin == true) Text("DEMO · Sample data only", style = MaterialTheme.typography.labelSmall)
             if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 8.dp))
             state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(vertical = 12.dp)) }
+            state.notice?.let { Text(it, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(vertical = 12.dp)) }
+            // An allowed quit returns the student to the class list.
+            LaunchedEffect(state.leftToList) {
+                if (state.leftToList) { nav.navigate("today") { popUpTo("today") { inclusive = false }; launchSingleTop = true }; model.clearLeftToList() }
+            }
             NavHost(navController = nav, startDestination = "sign-in", modifier = Modifier.weight(1f)) {
                 composable("sign-in") { SignIn(state.loading, state.authConfig, model::signIn, model::beginCollegeSignIn,
                     state.focusSessionId?.let { focusId -> { nav.navigate("focus/$focusId") } }) }
@@ -274,7 +279,7 @@ fun FocusLock(callbackUri: Uri? = null, clearCallback: () -> Unit = {}, model: F
                                 Text("QR check-ins and teacher confirmations appear here. If a record looks wrong, ask your teacher to correct it.")
                             } } }
                             if (session.pendingReview || session.id in state.pendingLocal) item { Text("Pending teacher review. This is not recorded attendance yet.", color = MaterialTheme.colorScheme.tertiary) }
-                            if (session.state in setOf("checkin_pending", "active") && (session.status == null || state.focusState !in setOf("active", "paused"))) item { Button(onClick = { model.prepareScan(); nav.navigate("scan/${session.id}") }) { Text(if (session.status == null) "Scan classroom QR" else "Scan QR to rejoin focus") } }
+                            if (session.state in setOf("checkin_pending", "active") && (session.status == null || state.focusState !in setOf("active", "paused"))) item { Button(onClick = { if (session.status == null) { model.prepareScan(); nav.navigate("scan/${session.id}") } else nav.navigate("focus/${session.id}") }) { Text(if (session.status == null) "Scan classroom QR" else "Rejoin focus") } }
                             if (session.status == null && session.state != "ended") item { TextButton(onClick = { model.prepareScan(); nav.navigate("scan/${session.id}") }) { Text("Camera unavailable? Request teacher review") } }
                             item { Text("Focus is your choice", style = MaterialTheme.typography.titleLarge) }
                             item { Text("Scanning is optional. A QR check-in is evidence of participation, not proof of physical presence. This app does not lock your phone.") }
@@ -433,7 +438,18 @@ fun FocusLock(callbackUri: Uri? = null, clearCallback: () -> Unit = {}, model: F
                         if (state.focusState == "ready" || state.focusState == "ended") {
                             if (classState == "ended") Text("This session has ended. Focus cannot be started or rejoined.", color = MaterialTheme.colorScheme.tertiary)
                             else Text("Focus starts by itself after you scan the teacher's QR and pass the face check, once the class is active. There is no way to start it without both.", color = MaterialTheme.colorScheme.tertiary)
-                            if (state.student != null && classState != "ended") Button(onClick = { model.prepareScan(); nav.navigate("scan/$id") }) { Text(if (state.focusState == "ended") "Join again (scan QR)" else "Scan QR to join focus") }
+                            val alreadyIn = state.detail?.takeIf { it.id == id }?.status != null
+                            if (state.student != null && classState != "ended") {
+                                if (state.focusState == "ended" && alreadyIn && state.rejoin != "approved") {
+                                    LaunchedEffect(id, state.rejoin) { while (state.rejoin == "pending") { delay(3_000); model.pollRejoin(id) } }
+                                    Text("To join focus again, ask your teacher first.")
+                                    Button(onClick = { model.clearNotice(); model.requestRejoin(id) }, enabled = state.rejoin != "pending") { Text(if (state.rejoin == "pending") "Waiting for teacher…" else "Ask teacher to rejoin") }
+                                    if (state.rejoin == "denied") Text("Your teacher said not yet. You can ask again.", color = MaterialTheme.colorScheme.error)
+                                } else Button(onClick = { model.prepareScan(); nav.navigate("scan/$id") }) {
+                                    Text(if (state.focusState == "ended") "Scan QR to rejoin" else "Scan QR to join focus")
+                                }
+                                if (state.rejoin == "approved") Text("Your teacher said you can rejoin. Scan the class QR.", color = MaterialTheme.colorScheme.primary)
+                            }
                         }
                         if (state.focusState == "active") Button(onClick = { model.pauseFocus(id) }) { Text("Pause") }
                         if (state.focusState == "paused") Button(onClick = { model.resumeFocus(id) }) { Text("Resume") }

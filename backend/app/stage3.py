@@ -173,6 +173,8 @@ def focus_policy(session_id: int, nonce: UUID, user: User = Depends(current_user
     now = now_utc()
     if session.state != "active" or utc(session.ends_at) <= now:
         raise HTTPException(409, "Focus participation is unavailable")
+    if not back_in_allowed(db, session.id, user.id):
+        raise HTTPException(409, "Ask your teacher to let you back into focus")
     attendance = db.get(Attendance, (session.id, user.id))
     if attendance is None or attendance.method != "qr" or attendance.status != "present":
         raise HTTPException(409, "Scan the teacher's QR to start focus")
@@ -200,6 +202,8 @@ def record_event(session_id: int, body: EventInput, user: User = Depends(current
     payload = verify_policy(body.policy, user.id, session_id, now_utc())
     if payload["cid"] != session.course_id:
         raise HTTPException(422, "Policy course mismatch")
+    if body.action in ("started", "resumed") and not back_in_allowed(db, session_id, user.id):
+        raise HTTPException(409, "Ask your teacher to let you back into focus")
     if body.action == "exited" and session.state != "ended" and not quit_approved(db, session_id, user.id):
         raise HTTPException(409, "Ask your teacher to approve quitting focus")
     if body.action == "backgrounded":
@@ -230,6 +234,22 @@ def require_new_face_check(db, session_id: int, student_id: int) -> None:
 def exit_view(row):
     return {"id": row.id, "session_id": row.session_id, "student_id": row.student_id, "kind": row.kind,
             "status": row.status, "created_at": utc(row.created_at)}
+
+
+def back_in_allowed(db, session_id: int, student_id: int) -> bool:
+    """After a student left the app/page or quit focus, coming back needs the teacher's approval given after that."""
+    left = db.scalar(select(FocusEvent.recorded_at).where(FocusEvent.session_id == session_id,
+                                                         FocusEvent.student_id == student_id,
+                                                         FocusEvent.action.in_(("exited", "backgrounded")))
+                     .order_by(FocusEvent.recorded_at.desc()).limit(1))
+    if left is None:
+        return True
+    approved = db.scalar(select(FocusExitRequest.resolved_at).where(FocusExitRequest.session_id == session_id,
+                                                                    FocusExitRequest.student_id == student_id,
+                                                                    FocusExitRequest.kind == "resume",
+                                                                    FocusExitRequest.status == "approved")
+                         .order_by(FocusExitRequest.resolved_at.desc()).limit(1))
+    return approved is not None and utc(approved) >= utc(left)
 
 
 def quit_approved(db, session_id: int, student_id: int) -> bool:
