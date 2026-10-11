@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { STUDENTS_MAP, recordFocusAlert, syncToDisk, syncFromDisk } from "@/lib/sessionStore";
+import { STUDENTS_MAP, recordFocusAlert, syncToDisk, syncFromDisk, FOCUS_ALERTS } from "@/lib/sessionStore";
 
 export const dynamic = "force-dynamic";
 
@@ -54,9 +54,23 @@ export async function POST(req: NextRequest) {
         });
       } else if (eventType === "EVENT_FOCUS_RESTORED") {
         student.is_focused = true;
-        // Keep present — leave_count preserves violation audit trail
-        if (student.attendance_status === "LEFT_MIDDLE") {
-          student.attendance_status = "VERIFIED_PRESENT";
+        student.attendance_status = "VERIFIED_PRESENT";
+
+        const isCallManager =
+          detail.toLowerCase().includes("call manager") ||
+          detail.toLowerCase().includes("telephony") ||
+          detail.toLowerCase().includes("call");
+
+        if (isCallManager) {
+          // Authorized call manager return: pardon violation and clear flag
+          student.leave_count = Math.max(0, (student.leave_count || 1) - 1);
+          student.anomaly_flag = undefined;
+
+          // Remove the active violation alert for this student
+          const alertIdx = FOCUS_ALERTS.findIndex((a) => a.student_id === student.student_id);
+          if (alertIdx !== -1) {
+            FOCUS_ALERTS.splice(alertIdx, 1);
+          }
         }
         syncToDisk();
       }

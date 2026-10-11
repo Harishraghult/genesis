@@ -419,16 +419,24 @@ class MainActivity : Activity() {
             val nm = getSystemService(NotificationManager::class.java) ?: return
             if (nm.isNotificationPolicyAccessGranted) {
                 nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
+                Toast.makeText(this, "Do Not Disturb Active: Priority Only", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(
                     this,
                     "FocusLock requires Do Not Disturb permission to suppress notifications during class.",
                     Toast.LENGTH_LONG
                 ).show()
-                val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                try {
+                    val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(intent)
+                } catch (_: Exception) {
+                    val intent = Intent(Settings.ACTION_ZEN_MODE_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(intent)
                 }
-                startActivity(intent)
             }
         } catch (_: Exception) {}
     }

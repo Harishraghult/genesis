@@ -35,15 +35,27 @@ export default function StudentPage() {
   useEffect(() => { sessionRef.current = session; }, [session]);
   useEffect(() => { sessionEndedRef.current = sessionEnded; }, [sessionEnded]);
 
-  // Restore session if user refreshes page while in lecture mode
+  // Restore session if user refreshes page while in lecture mode (only if session still active on server)
   useEffect(() => {
     try {
       const saved = sessionStorage.getItem("fl_active_student_session");
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed && parsed.student_id && parsed.session_id) {
-          setSession(parsed);
-          sessionRef.current = parsed;
+          fetch(`${getApiBase()}/api/session/status`, { cache: "no-store" })
+            .then((res) => res.json())
+            .then((data) => {
+              if (data.session && data.session.is_active) {
+                setSession(parsed);
+                sessionRef.current = parsed;
+              } else {
+                sessionStorage.removeItem("fl_active_student_session");
+              }
+            })
+            .catch(() => {
+              setSession(parsed);
+              sessionRef.current = parsed;
+            });
         }
       }
     } catch {}
@@ -60,13 +72,13 @@ export default function StudentPage() {
     if (typeof document !== "undefined" && document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
     }
-    // Auto-return to scan screen after 5 s
+    // Auto-return to scan screen after 3.5 s
     setTimeout(() => {
       setSession(null);
       sessionRef.current = null;
       setSessionEnded(false);
       sessionEndedRef.current = false;
-    }, 5000);
+    }, 3500);
   }, []);
 
   useEffect(() => {
@@ -79,7 +91,7 @@ export default function StudentPage() {
       }
     });
 
-    // 2. Active poll: terminate ONLY when instructor explicitly stops session AFTER student joined
+    // 2. High-frequency active poll: exit immediately (<1.5s) when instructor stops session
     const pollInterval = setInterval(() => {
       fetch(`${getApiBase()}/api/session/status`, { cache: "no-store" })
         .then((res) => res.json())
@@ -87,23 +99,16 @@ export default function StudentPage() {
           if (data.emergency_number) setEmergencyNumber(data.emergency_number);
 
           const currentStudent = sessionRef.current;
-          if (currentStudent && data.session) {
-            const studentJoinedAt = currentStudent.joined_at || 0;
-            const sessionEndedAt = data.session.ended_at || 0;
-            const isSessionInactive = data.session.is_active === false;
-
-            // ONLY terminate if:
-            // 1. Session is marked inactive
-            // 2. sessionEndedAt > 0 (instructor actually clicked "Stop Session")
-            // 3. sessionEndedAt >= (studentJoinedAt - 5) (stop happened during or after student's presence)
-            // NEVER terminate if ended_at is 0 or uninitialized!
-            if (isSessionInactive && sessionEndedAt > 0 && sessionEndedAt >= (studentJoinedAt - 5)) {
+          if (currentStudent) {
+            // When instructor ends/quits session, server reports is_active === false
+            const isInactive = !data.session || data.session.is_active === false;
+            if (isInactive) {
               triggerSessionTermination();
             }
           }
         })
         .catch(() => {});
-    }, 2500);
+    }, 1500);
 
     // 3. BroadcastChannel cross-tab instant notification
     let bc: BroadcastChannel | null = null;
