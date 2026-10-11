@@ -38,7 +38,7 @@ export default function QRScanner({ onSuccess }: QRScannerProps) {
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [cameraActive, setCameraActive] = useState<boolean>(false);
-  const [sessionActive, setSessionActive] = useState<boolean>(false); // Defaults to Idle state!
+  const [sessionActive, setSessionActive] = useState<boolean>(true);
   const [scanned, setScanned] = useState<boolean>(false);
   const submittingRef = useRef(false);
   const scanHandledRef = useRef(false);

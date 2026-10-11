@@ -17,7 +17,7 @@ export async function GET() {
       const key = `${s.student_id}_${s.leave_count}`;
       if (!existingIds.has(key)) {
         combinedAlerts.push({
-          id: `fa_${s.student_id}_${s.leave_count || 1}_${Date.now()}`,
+          id: `fa_${s.student_id}_${s.leave_count || 1}`,
           student_id: s.student_id,
           student_name: s.student_name,
           seat: s.seat,

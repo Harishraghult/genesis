@@ -168,6 +168,7 @@ export default function UnifiedFacultyDashboard() {
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const seenAlertIdsRef = useRef<Set<string>>(new Set());
+  const isInitialStatusLoadRef = useRef<boolean>(true);
 
   // Dual-tone high-contrast alert chime synthesized through Web Audio API
   const playAlertSound = () => {
@@ -263,33 +264,43 @@ export default function UnifiedFacultyDashboard() {
 
       // Check for new focus alerts
       if (Array.isArray(resStatus.recent_focus_alerts)) {
-        let hasNewAlert = false;
-        for (const fa of resStatus.recent_focus_alerts) {
-          if (!seenAlertIdsRef.current.has(fa.id)) {
+        if (isInitialStatusLoadRef.current) {
+          // On first load, seed seen alerts so pre-existing alerts do not trigger an immediate popup
+          for (const fa of resStatus.recent_focus_alerts) {
             seenAlertIdsRef.current.add(fa.id);
-            hasNewAlert = true;
-            const event: AnomalyEvent = {
-              id: fa.id,
-              student_id: fa.student_id,
-              student_name: fa.student_name,
-              timestamp: fa.timestamp,
-              message: fa.detail || "Student left foreground",
-              title: fa.type === "TAMPER_DETECTED" ? "Tamper Attempt" : "Focus Lost Violation",
-              type: fa.type || "APP_SWITCH",
-              leave_count: fa.leave_count,
-            };
-            setRecentAnomalyAlerts((prev) => [event, ...prev.slice(0, 4)]);
           }
-        }
-        if (hasNewAlert) {
-          playAlertSound();
-          setFocusAlertPopup("1 new focus interruption for review. Cause unknown; attendance unchanged.");
-          if (soundEnabled && typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-            try {
-              new Notification("FocusLock · Focus Event for Review", {
-                body: "A student moved away from the active lecture window.",
-              });
-            } catch {}
+          isInitialStatusLoadRef.current = false;
+        } else {
+          let hasNewAlert = false;
+          let newestAlertDetail = "";
+          for (const fa of resStatus.recent_focus_alerts) {
+            if (!seenAlertIdsRef.current.has(fa.id)) {
+              seenAlertIdsRef.current.add(fa.id);
+              hasNewAlert = true;
+              newestAlertDetail = `${fa.student_name}: ${fa.detail || "Student left foreground"}`;
+              const event: AnomalyEvent = {
+                id: fa.id,
+                student_id: fa.student_id,
+                student_name: fa.student_name,
+                timestamp: fa.timestamp,
+                message: fa.detail || "Student left foreground",
+                title: fa.type === "TAMPER_DETECTED" ? "Tamper Attempt" : "Focus Lost Violation",
+                type: fa.type || "APP_SWITCH",
+                leave_count: fa.leave_count,
+              };
+              setRecentAnomalyAlerts((prev) => [event, ...prev.slice(0, 4)]);
+            }
+          }
+          if (hasNewAlert) {
+            playAlertSound();
+            setFocusAlertPopup(newestAlertDetail || "New focus interruption for review. Cause unknown; attendance unchanged.");
+            if (soundEnabled && typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+              try {
+                new Notification("FocusLock · Focus Event for Review", {
+                  body: "A student moved away from the active lecture window.",
+                });
+              } catch {}
+            }
           }
         }
       }
