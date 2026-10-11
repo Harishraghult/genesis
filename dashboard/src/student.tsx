@@ -132,7 +132,7 @@ function Today({ auth, onOpen, onExpired, flash }: { auth: Auth; onOpen: (id: nu
   </section>;
 }
 
-type CheckResult = { ok: true; duplicate: boolean } | { ok: false; message: string; review?: boolean };
+type CheckResult = { ok: true; duplicate: boolean } | { ok: false; message: string; review?: boolean; rescan?: boolean };
 
 /** QR check-in, adding the server-side face check when the student has a recorded face. */
 function useCheckInFlow(auth: Auth) {
@@ -144,11 +144,20 @@ function useCheckInFlow(auth: Auth) {
     try { return { ok: true, duplicate: (await checkIn(auth.user.id, token, qr, faceToken)).duplicate }; }
     catch (e) {
       if (e instanceof ApiError && e.status === 410 && faceToken)
-        return { ok: false, message: 'Face verified. The class QR changed while you were checking; scan it once more to finish. No face check is needed for the next 2 minutes.' };
+        return { ok: false, rescan: true, message: 'Face verified. The class QR changed while you were checking, so scan it once more to finish. No face check is needed for the next 2 minutes.' };
       const message = (e as Error).message;
       if (/Face enrollment is required/i.test(message)) return { ok: false, message: 'No face is recorded for you yet. Ask your administrator to record it, or ask your teacher to confirm your attendance.', review: true };
       return { ok: false, message };
     }
+  }
+  const prepared = useRef(false);
+  async function prepare() {
+    if (prepared.current) return;
+    prepared.current = true;
+    try {
+      const status = await api<{ mode: string; enrolled: boolean }>('/face/templates/me', token);
+      if (status.mode !== 'off' && status.enrolled) await (await import('./face')).loadFaceEngine();
+    } catch { prepared.current = false; }
   }
   async function run(qr: string): Promise<CheckResult> {
     const status = await api<{ mode: string; enrolled: boolean }>('/face/templates/me', token).catch(() => ({ mode: 'off', enrolled: false }));
@@ -174,7 +183,7 @@ function useCheckInFlow(auth: Auth) {
     extra={face.failures > 0 ? <p className="error" role="alert">That did not match. Try again ({face.failures} of 3).</p> : undefined}
     onTemplate={template => void verified(template)}
     onCancel={() => { face.resolve({ ok: false, message: 'Face check cancelled. Scan again when you are ready, or ask your teacher.' }); setFace(null); }}/>;
-  return { run, modal };
+  return { run, modal, prepare };
 }
 
 function SessionView({ auth, sessionId, onBack, onLeft, onExpired }: { auth: Auth; sessionId: number; onBack: () => void; onLeft: (message: string) => void; onExpired: () => void }) {
@@ -189,6 +198,7 @@ function SessionView({ auth, sessionId, onBack, onLeft, onExpired }: { auth: Aut
   useEffect(() => { api<Resource[]>(`/sessions/${sessionId}/resources`, token).then(setResources).catch(() => setResources([])); }, [sessionId, token, session?.state]);
 
   const flow = useCheckInFlow(auth);
+  useEffect(() => { if (session && isOpen(session) && (!session.attendance || session.attendance.method === 'qr')) void flow.prepare(); }, [session?.state, session?.attendance?.status]); // eslint-disable-line react-hooks/exhaustive-deps
   async function scanned(qr: string) {
     setStep('idle'); setBusy(true); setError(''); setNotice('Checking you in…');
     try {
@@ -196,7 +206,8 @@ function SessionView({ auth, sessionId, onBack, onLeft, onExpired }: { auth: Aut
       if (result.ok) {
         setNotice(result.duplicate ? 'You were already checked in.' : 'Checked in. Your attendance is recorded as present.');
         await refresh();
-      } else { setNotice(''); setError(result.message); if (result.review) setStep('review'); }
+      } else if (result.rescan) { setNotice(result.message); setStep('scan'); }
+      else { setNotice(''); setError(result.message); if (result.review) setStep('review'); }
     } finally { setBusy(false); }
   }
   async function requestReview(event: React.FormEvent) {
@@ -231,7 +242,7 @@ function SessionView({ auth, sessionId, onBack, onLeft, onExpired }: { auth: Aut
       </form>}
     </div>
 
-    {focusEligible && session.state !== 'ready' && <FocusPanel auth={auth} session={session} checkInFlow={flow.run} onQuitApproved={() => onLeft(`Your teacher let you leave focus in “${session.title}”. Your attendance is unchanged; to rejoin, open the class and ask your teacher.`)}/>}
+    {focusEligible && session.state !== 'ready' && <FocusPanel auth={auth} session={session} checkInFlow={flow.run} prepareFace={flow.prepare} onQuitApproved={() => onLeft(`Your teacher let you leave focus in “${session.title}”. Your attendance is unchanged; to rejoin, open the class and ask your teacher.`)}/>}
 
     <div className="card">
       <h3>Course resources</h3>
@@ -255,7 +266,7 @@ function SessionView({ auth, sessionId, onBack, onLeft, onExpired }: { auth: Aut
   </section>;
 }
 
-function FocusPanel({ auth, session, checkInFlow, onQuitApproved }: { auth: Auth; session: ClassSession; checkInFlow: (qr: string) => Promise<CheckResult>; onQuitApproved: () => void }) {
+function FocusPanel({ auth, session, checkInFlow, prepareFace, onQuitApproved }: { auth: Auth; session: ClassSession; checkInFlow: (qr: string) => Promise<CheckResult>; prepareFace: () => Promise<void>; onQuitApproved: () => void }) {
   const token = auth.access_token;
   const key = `focuslock-focus-${auth.user.id}-${session.id}-${session.starts_at}`;
   const saved = (() => { try { return JSON.parse(sessionStorage.getItem(key) ?? 'null') as { state: FocusState; policy: { token: string; exp: number } | null } | null; } catch { return null; } })();
@@ -269,6 +280,8 @@ function FocusPanel({ auth, session, checkInFlow, onQuitApproved }: { auth: Auth
   const [error, setError] = useState('');
   const [quitRequest, setQuitRequest] = useState<'none' | 'pending' | 'denied'>('none');
   const [backRequest, setBackRequest] = useState<'none' | 'pending' | 'denied' | 'approved'>('none');
+  const [note, setNote] = useState('');
+  useEffect(() => { if (backRequest === 'approved') void prepareFace(); }, [backRequest]); // eslint-disable-line react-hooks/exhaustive-deps
   const setState = (next: FocusState) => { stateRef.current = next; setStateRaw(next); persist(); };
 
   const send = useCallback(async (action: string) => {
@@ -363,7 +376,11 @@ function FocusPanel({ auth, session, checkInFlow, onQuitApproved }: { auth: Auth
     setScanning(false); setBusy(true); setError('');
     try {
       const result = await checkInFlow(qr); // includes the face check when one is recorded
-      if (!result.ok) { setError(result.message); return; }
+      if (!result.ok) {
+        if (result.rescan) { setNote(result.message); setScanning(true); } else setError(result.message);
+        return;
+      }
+      setNote('');
       await send('started');
       setBackRequest('none'); setState('active');
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
@@ -384,6 +401,7 @@ function FocusPanel({ auth, session, checkInFlow, onQuitApproved }: { auth: Auth
     {quitRequest === 'denied' && (state === 'active' || state === 'paused') && <p className="hint">Your teacher asked you to stay in focus.</p>}
     {backRequest === 'pending' && <p className="success" role="status">Waiting for your teacher to let you back in…</p>}
     {backRequest === 'denied' && <p className="hint">Your teacher said not yet. You can ask again.</p>}
+    {note && state === 'quit' && <p className="success" role="status">{note}</p>}
     {error && <p className="error" role="alert">{error}</p>}
     <div className="actions">
       {state === 'active' && <button onClick={() => void act('paused', 'paused')}>Pause</button>}

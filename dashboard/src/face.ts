@@ -26,7 +26,7 @@ export function loadFaceEngine(): Promise<Engine> {
     ort.env.wasm.wasmPaths = '/models/ort/';
     ort.env.wasm.numThreads = 1;
     ort.env.logLevel = 'error';
-    const session = await ort.InferenceSession.create('/models/sface_2021dec.onnx', { executionProviders: ['wasm'] });
+    const session = await ort.InferenceSession.create('/models/sface_2021dec.onnx', { executionProviders: ['wasm'], logSeverityLevel: 3 });
     return { faceapi, ort, session };
   })();
   engine.catch(() => { engine = null; });

@@ -33,6 +33,13 @@ async def security_headers(request, call_next):
     response = await call_next(request)
     for name, value in SECURITY_HEADERS.items():
         response.headers.setdefault(name, value)
+    path = request.url.path
+    if path.startswith("/assets/"):  # file names carry a content hash
+        response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+    elif path.startswith("/models/"):  # face models (~49 MB): avoid re-downloading on every visit
+        response.headers.setdefault("Cache-Control", "public, max-age=604800")
+    elif not path.startswith("/api"):
+        response.headers.setdefault("Cache-Control", "no-cache")
     return response
 
 
