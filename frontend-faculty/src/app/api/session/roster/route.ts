@@ -5,11 +5,17 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const auditId = `aud_${Math.floor(Date.now() / 1000)}_${Math.random().toString(36).slice(2, 6)}`;
-  AUDIT_LOGS.push({
+  AUDIT_LOGS.unshift({
     id: auditId,
+    session_id: SESSION_STATE.session_id,
+    student_id: "ALL",
+    student_name: "Instructor Roster View",
+    actor: "Instructor",
     action: "AUDIT_ROSTER_VIEWED",
-    timestamp: Date.now() / 1000,
-    detail: `Instructor inspected attendance records of ${STUDENTS_MAP.size} students`,
+    previous_status: null,
+    new_status: "inspected",
+    reason: `Instructor inspected attendance records of ${STUDENTS_MAP.size} students`,
+    recorded_at: new Date().toISOString(),
   });
 
   const students = Array.from(STUDENTS_MAP.values()).map((s) => ({

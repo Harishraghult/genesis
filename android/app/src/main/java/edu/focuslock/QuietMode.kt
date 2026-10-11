@@ -1,0 +1,216 @@
+package edu.focuslock
+
+import android.app.AlarmManager
+import android.app.AutomaticZenRule
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.pm.ServiceInfo
+import android.net.Uri
+import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.os.SystemClock
+import android.provider.Settings
+import android.service.notification.Condition
+
+/** Manages only FocusLock's own DND rule; other user/system DND rules are untouched. */
+object QuietMode {
+    private const val PREFS = "focuslock-quiet"
+    private const val RULE = "rule"
+    private const val CHANNEL = "focuslock-quiet-session"
+    private const val NOTICE = 4105
+    const val START = "edu.focuslock.QUIET_START"
+    const val STOP = "edu.focuslock.QUIET_STOP"
+    const val EXPIRE = "edu.focuslock.QUIET_EXPIRE"
+
+    fun supported(): Boolean = Build.VERSION.SDK_INT >= 29
+    fun optedIn(context: Context): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("opted_in", true)
+    fun setOptedIn(context: Context, value: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("opted_in", value).apply()
+        if (!value) stop(context)
+    }
+    fun access(context: Context): Boolean = supported() &&
+        (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).isNotificationPolicyAccessGranted
+    fun requested(context: Context): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("active", false)
+
+    private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private fun manager(context: Context) = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    private fun conditionId(context: Context): Uri = Condition.newId(context).appendPath("class-session").build()
+
+    fun live(context: Context): Boolean {
+        val saved = prefs(context)
+        if (!saved.getBoolean("active", false)) return false
+        val boot = Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT, -1)
+        return saved.getInt("student", -1) > 0 && saved.getInt("session", -1) > 0 &&
+            FocusDeadline.isLive(saved.getInt("boot", -2), boot,
+                saved.getLong("deadline", 0L), SystemClock.elapsedRealtime())
+    }
+
+    fun session(context: Context): Int? = prefs(context).getInt("session", -1).takeIf { it > 0 && live(context) }
+    fun deadline(context: Context): Long = prefs(context).getLong("deadline", 0L)
+
+    fun begin(context: Context, studentId: Int, sessionId: Int, boot: Int, deadline: Long) {
+        if (!supported() || !access(context)) return
+        val currentBoot = Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT, -1)
+        if (!FocusDeadline.isLive(boot, currentBoot, deadline, SystemClock.elapsedRealtime())) return
+        if (requested(context)) stop(context)
+        prefs(context).edit().putBoolean("active", true).putInt("student", studentId)
+            .putInt("session", sessionId).putInt("boot", boot).putLong("deadline", deadline).apply()
+        try {
+            context.startForegroundService(Intent(context, QuietSessionService::class.java).setAction(START))
+        } catch (_: Exception) {
+            stop(context)
+        }
+    }
+
+    fun activateRule(context: Context) {
+        if (!access(context)) return
+        val notificationManager = manager(context)
+        val saved = prefs(context)
+        var id = saved.getString(RULE, null)
+        if (id == null || !notificationManager.automaticZenRules.containsKey(id)) {
+            val rule = if (Build.VERSION.SDK_INT >= 35) {
+                AutomaticZenRule.Builder("FocusLock class session", conditionId(context))
+                    .setConfigurationActivity(ComponentName(context, MainActivity::class.java))
+                    .setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
+                    .setTriggerDescription("While a student-approved class session is active")
+                    .build()
+            } else {
+                AutomaticZenRule("FocusLock class session", null,
+                    ComponentName(context, MainActivity::class.java), conditionId(context), null,
+                    NotificationManager.INTERRUPTION_FILTER_PRIORITY, true)
+            }
+            id = notificationManager.addAutomaticZenRule(rule)
+            if (id.isNullOrBlank()) return
+            saved.edit().putString(RULE, id).apply()
+        }
+        notificationManager.setAutomaticZenRuleState(id!!,
+            Condition(conditionId(context), "FocusLock class session", Condition.STATE_TRUE))
+    }
+
+    fun deactivateRule(context: Context) {
+        if (!access(context)) return
+        val id = prefs(context).getString(RULE, null) ?: return
+        runCatching {
+            if (manager(context).automaticZenRules.containsKey(id))
+                manager(context).setAutomaticZenRuleState(id,
+                    Condition(conditionId(context), "FocusLock class session ended", Condition.STATE_FALSE))
+        }
+    }
+
+    private fun alarm(context: Context): PendingIntent = PendingIntent.getBroadcast(context, 4105,
+        Intent(context, QuietSessionReceiver::class.java).setAction(EXPIRE),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+
+    fun scheduleExpiry(context: Context) {
+        val alarms = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val deadline = deadline(context)
+        if (Build.VERSION.SDK_INT < 31 || alarms.canScheduleExactAlarms())
+            alarms.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, deadline, alarm(context))
+        else alarms.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, deadline, alarm(context))
+    }
+
+    fun stop(context: Context) {
+        prefs(context).edit().putBoolean("active", false).apply()
+        runCatching { (context.getSystemService(Context.ALARM_SERVICE) as AlarmManager).cancel(alarm(context)) }
+        deactivateRule(context)
+    }
+
+    fun reconcile(context: Context) {
+        if (requested(context) && (!live(context) || !access(context))) stop(context)
+        else if (requested(context) && !QuietSessionService.running)
+            runCatching { context.startForegroundService(Intent(context, QuietSessionService::class.java).setAction(START)) }
+                .onFailure { stop(context) }
+    }
+
+    fun createChannel(context: Context) {
+        manager(context).createNotificationChannel(
+            NotificationChannel(CHANNEL, "FocusLock quiet session", NotificationManager.IMPORTANCE_LOW))
+    }
+
+    fun notification(context: Context): Notification {
+        val stop = PendingIntent.getService(context, 4105,
+            Intent(context, QuietSessionService::class.java).setAction(STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val open = PendingIntent.getActivity(context, 4106,
+            Intent(context, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        return Notification.Builder(context, CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_lock_silent_mode)
+            .setContentTitle("FocusLock quiet mode is on")
+            .setContentText("Notifications are quieter for this class. Stop at any time.")
+            .setContentIntent(open).setOngoing(true)
+            .addAction(Notification.Action.Builder(null, "Stop quiet mode", stop).build())
+            .build()
+    }
+
+    fun notificationId(): Int = NOTICE
+}
+
+class QuietSessionService : Service() {
+    companion object {
+        @Volatile var running = false
+            private set
+    }
+    private val handler = Handler(Looper.getMainLooper())
+    private val watchdog = object : Runnable {
+        override fun run() {
+            if (!QuietMode.live(this@QuietSessionService) || !QuietMode.access(this@QuietSessionService)) {
+                stopNow()
+                return
+            }
+            handler.postDelayed(this, 1000L)
+        }
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == QuietMode.STOP || !QuietMode.live(this) || !QuietMode.access(this)) {
+            stopNow()
+            return START_NOT_STICKY
+        }
+        try {
+            QuietMode.createChannel(this)
+            if (Build.VERSION.SDK_INT >= 34)
+                startForeground(QuietMode.notificationId(), QuietMode.notification(this), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            else startForeground(QuietMode.notificationId(), QuietMode.notification(this))
+            running = true
+            QuietMode.activateRule(this)
+            QuietMode.scheduleExpiry(this)
+            handler.removeCallbacks(watchdog)
+            handler.post(watchdog)
+        } catch (_: Exception) { stopNow() }
+        return START_NOT_STICKY
+    }
+
+    private fun stopNow() {
+        running = false
+        handler.removeCallbacks(watchdog)
+        QuietMode.stop(this)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    override fun onDestroy() {
+        running = false
+        handler.removeCallbacks(watchdog)
+        if (QuietMode.requested(this)) QuietMode.stop(this)
+        super.onDestroy()
+    }
+}
+
+class QuietSessionReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent?) {
+        if (intent?.action in setOf(QuietMode.EXPIRE, Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED))
+            QuietMode.stop(context)
+    }
+}

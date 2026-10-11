@@ -419,6 +419,7 @@ class MainActivity : Activity() {
             val nm = getSystemService(NotificationManager::class.java) ?: return
             if (nm.isNotificationPolicyAccessGranted) {
                 nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
+                runCatching { QuietMode.activateRule(this) }
                 Toast.makeText(this, "Do Not Disturb Active: Priority Only", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(
@@ -443,6 +444,7 @@ class MainActivity : Activity() {
 
     private fun disableDndMode() {
         try {
+            runCatching { QuietMode.stop(this) }
             val nm = getSystemService(NotificationManager::class.java)
             if (nm != null && nm.isNotificationPolicyAccessGranted) {
                 nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)

@@ -43,9 +43,24 @@
                 <action android:name="android.net.VpnService" />
             </intent-filter>
             <!-- A class restriction must never be "always-on": it should only exist during a session. -->
-            <meta-data
-                android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON"
-                android:value="false" />
+        <!-- Quiet Session DND Foreground Service and Expiry Receiver -->
+        <service
+            android:name=".QuietSessionService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="FocusLock Do Not Disturb class session active" />
         </service>
+
+        <receiver
+            android:name=".QuietSessionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="edu.focuslock.QUIET_EXPIRE" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
