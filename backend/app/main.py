@@ -1,690 +1,273 @@
-import time
-import json
-import asyncio
-from typing import Dict, List, Set, Any, Optional
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Depends, Header
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-
-from .config import settings
-from .models import (
-    PunchInRequest, PunchInResponse, FocusEventRequest,
-    PresencePulseTrigger, QuizSubmission, StudentRosterRecord,
-    SessionStatus, RosterResponse, AuditLogEntry, AggregateMetrics,
-    OverrideAttendanceRequest, StartSessionRequest, MarkAttendanceRequest
-)
-from .security import (
-    get_current_totp, verify_totp, create_session_jwt,
-    decode_session_jwt
-)
-from .anomaly import evaluate_punch_anomaly, reset_anomaly_tracker, get_allowed_room_bssid_hashes
-from .middleware import SignedRequestGateMiddleware
-from .mock_data import MOCK_SLIDES, MOCK_TIMETABLE, MOCK_QUIZZES, MOCK_ENROLLED_STUDENTS
-
-app = FastAPI(title="FocusLock Attendance & Focus Gate", version="1.0.0")
-
-# CORS middleware for Next.js frontend clients on 3000 and 3001
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Custom Signed Request Gate Middleware for /api/course-portal/*
-app.add_middleware(SignedRequestGateMiddleware)
-
-# --- IN-MEMORY SESSION & WEBSOCKET STATE ---
-ACTIVE_SESSION = {
-    "session_id": "FL-CS402-2026",
-    "course_name": MOCK_TIMETABLE["course_title"],
-    "instructor": MOCK_TIMETABLE["instructor"],
-    "room": MOCK_TIMETABLE["room"],
-    "started_at": time.time(),
-    "is_active": False
-}
-
-# student_id -> StudentRecord dictionary
-STUDENTS_STORE: Dict[str, Dict[str, Any]] = {}
-
-# WebSocket connection manager
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Set[WebSocket] = set()
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.add(websocket)
-
-    def disconnect(self, websocket: WebSocket):
-        self.active_connections.discard(websocket)
-
-    async def broadcast(self, message: dict):
-        text = json.dumps(message)
-        dead = []
-        for connection in list(self.active_connections):
-            try:
-                await connection.send_text(text)
-            except Exception:
-                dead.append(connection)
-        for d in dead:
-            self.disconnect(d)
-
-manager = ConnectionManager()
-
 import secrets
-import hmac
+from datetime import datetime, timedelta, timezone
+from typing import Literal
+from fastapi import Depends, FastAPI, HTTPException, Response, Request
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import delete, select, text
+from sqlalchemy.orm import Session
+from .auth import bearer, current_user, digest, teacher, utc
+from .config import settings
+from .db import get_db
+from .models import AdminAudit, Attendance, AttendanceEvent, ClassSession, CourseOffering, DevToken, Enrollment, PendingAttendance, User
 
-AUDIT_LOGS: List[Dict[str, Any]] = []
+app = FastAPI(title="FocusLock", version="0.6.0")
+app.add_middleware(CORSMiddleware, allow_origins=settings().cors_origins.split(","), allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Authorization", "Content-Type"])
 
-# Only enrolled students (MOCK_ENROLLED_STUDENTS) may check in. Tests may disable this.
-ENFORCE_ENROLLMENT = True
-ENROLLED_BY_ID: Dict[str, Dict[str, Any]] = {s["student_id"].upper(): s for s in MOCK_ENROLLED_STUDENTS}
 
-def compute_aggregate_metrics() -> Dict[str, Any]:
-    # Absent (not yet checked-in) students are excluded from class-wide aggregates
-    students_list = [s for s in STUDENTS_STORE.values() if s.get("status") != "ABSENT"]
-    total = len(students_list)
-    focused = sum(1 for s in students_list if s.get("is_focused", True) and s.get("status") not in ["NETWORK_VERIFICATION_NEEDED", "PROXY_FLAGGED"])
-    distracted = sum(1 for s in students_list if not s.get("is_focused", True) and s.get("status") not in ["NETWORK_VERIFICATION_NEEDED", "PROXY_FLAGGED"])
-    flagged = sum(1 for s in students_list if s.get("status") in ["NETWORK_VERIFICATION_NEEDED", "PROXY_FLAGGED"])
-    pct = round((focused / total * 100.0), 1) if total > 0 else 100.0
-    return {
-        "total_joined": total,
-        "focused_count": focused,
-        "distracted_count": distracted,
-        "focus_percentage": pct,
-        "flagged_count": flagged,
-    }
+@app.middleware("http")
+async def no_store(request, call_next):
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
-def require_instructor_auth(
-    request: Request,
-    x_instructor_key: Optional[str] = Header(None)
-) -> str:
-    if not x_instructor_key or not hmac.compare_digest(x_instructor_key, settings.INSTRUCTOR_KEY):
-        raise HTTPException(
-            status_code=401,
-            detail="Instructor authorization required to access protected student roster."
-        )
-    return "instructor"
 
-def seed_students():
-    """Load the enrolled roster; everyone starts ABSENT until they scan or are marked."""
-    STUDENTS_STORE.clear()
-    for s in MOCK_ENROLLED_STUDENTS:
-        STUDENTS_STORE[s["student_id"]] = {
-            "student_id": s["student_id"],
-            "student_name": s["student_name"],
-            "seat": s["seat"],
-            "status": "ABSENT",
-            "is_focused": True,
-            "network_attested": False,
-            "device_attested": False,
-            "joined_at": 0,
-            "last_event": "NOT_CHECKED_IN",
-            "last_seen": 0,
-            "quiz_submitted": False,
-            "anomaly_flag": None
-        }
+class Login(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(max_length=254)
+    password: str = Field(max_length=256)
 
-seed_students()
 
-# --- ROUTES ---
+class Confirmation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["present", "absent", "excused"]
+    reason: str | None = Field(default=None, max_length=500)
 
-@app.get("/")
-def root():
-    return {
-        "service": "FocusLock Core API Gateway",
-        "status": "online",
-        "active_session": ACTIVE_SESSION["session_id"],
-        "endpoints": {
-            "health": "/api/health",
-            "status": "/api/session/status",
-            "current_qr": "/api/session/current-qr",
-            "docs": "/docs"
-        }
-    }
 
-@app.get("/api/health")
-def health():
-    return {
-        "status": "healthy",
-        "service": "FocusLock Core Backend",
-        "time": time.time(),
-        "active_session": ACTIVE_SESSION["session_id"]
-    }
+class NewSession(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    course_id: int = Field(gt=0)
+    title: str = Field(min_length=3, max_length=150)
+    starts_at: datetime
+    ends_at: datetime
+    room_code: str = Field(default="UNASSIGNED", min_length=1, max_length=40, pattern=r"^[A-Za-z0-9._-]+$")
 
-@app.get("/api/session/current-qr")
-def current_qr():
-    """
-    Returns rolling HMAC-SHA256 TOTP token, per-session salt, and allowed room AP hashes.
-    Allows on-device matching without exposing or persisting raw network identifiers.
-    """
-    if not ACTIVE_SESSION.get("is_active", False):
-        return {
-            "is_active": False,
-            "totp_token": "",
-            "expires_in": 0,
-            "session_id": ACTIVE_SESSION["session_id"],
-            "qr_payload": "",
-            "message": "Session has not been started by the instructor yet."
-        }
 
-    token, expires_in, current_ts = get_current_totp()
-    allowed_hashes = get_allowed_room_bssid_hashes(settings.SESSION_SALT)
-    return {
-        "is_active": True,
-        "totp_token": token,
-        "expires_in": expires_in,
-        "session_id": ACTIVE_SESSION["session_id"],
-        "timestamp": current_ts,
-        "step_interval": settings.TOTP_STEP_SECONDS,
-        "session_salt": settings.SESSION_SALT,
-        "allowed_bssid_hashes": allowed_hashes,
-        "qr_payload": json.dumps({
-            "session_id": ACTIVE_SESSION["session_id"],
-            "totp": token,
-            "ts": current_ts,
-            "salt": settings.SESSION_SALT,
-            "room_aps": settings.TARGET_ROOM_BSSIDS,
-            "bssid": settings.TARGET_BSSID
-        })
-    }
+def user_view(user):
+    return {"id": user.id, "name": user.name, "email": user.email, "role": user.role}
 
-@app.get("/api/session/enrolled-students")
-def get_enrolled_students():
-    """Public helper endpoint returning the official course enrolled student list."""
-    return {
-        "enrolled_students": MOCK_ENROLLED_STUDENTS,
-        "is_active": ACTIVE_SESSION.get("is_active", False)
-    }
 
-@app.post("/api/session/start")
-async def start_session(req: Optional[StartSessionRequest] = None):
-    """Instructor action to launch and activate the lecture attendance session."""
-    if not ACTIVE_SESSION.get("is_active", False):
-        seed_students()  # fresh attendance sheet for each new session
-        reset_anomaly_tracker()
-    ACTIVE_SESSION["is_active"] = True
-    ACTIVE_SESSION["started_at"] = time.time()
-    if req and req.course_name:
-        ACTIVE_SESSION["course_name"] = req.course_name
-    if req and req.instructor:
-        ACTIVE_SESSION["instructor"] = req.instructor
-    if req and req.room:
-        ACTIVE_SESSION["room"] = req.room
+def course_view(course):
+    return {"id": course.id, "code": course.code, "title": course.title, "term": course.term}
 
-    await manager.broadcast({
-        "type": "SESSION_STARTED",
-        "session": ACTIVE_SESSION,
-        "metrics": compute_aggregate_metrics()
-    })
-    return {"ok": True, "session": ACTIVE_SESSION}
 
-@app.get("/api/session/status")
-def session_status():
-    """
-    Public Projector Mode endpoint (FERPA-compliant):
-    Returns session metadata and class-wide AGGREGATE metrics only.
-    Zero individual student names, seat positions, or per-student records are exposed.
-    """
-    metrics = compute_aggregate_metrics()
-    return {
-        "session": ACTIVE_SESSION,
-        "summary": metrics,
-        "metrics": metrics,
-        "emergency_number": settings.EMERGENCY_NUMBER
-    }
+def attendance_view(row):
+    return {"session_id": row.session_id, "student_id": row.student_id, "status": row.status, "method": row.method, "confirmed_by": row.confirmed_by, "updated_at": utc(row.updated_at)}
 
-@app.get("/api/session/roster")
-def get_session_roster(
-    request: Request,
-    _auth: str = Depends(require_instructor_auth)
-):
-    """
-    Role-protected Instructor endpoint:
-    Access to individual student roster is protected by instructor key.
-    Every view is logged in the permanent audit trail.
-    Per-student 'Distracted' states are hidden; only attendance verification status is returned.
-    """
-    client_ip = request.client.host if request.client else "unknown"
-    audit_id = f"aud_{int(time.time())}_{secrets.token_hex(4)}"
-    audit_entry = {
-        "id": audit_id,
-        "action": "AUDIT_ROSTER_VIEWED",
-        "actor": "instructor",
-        "timestamp": time.time(),
-        "ip_address": client_ip,
-        "detail": f"Instructor accessed attendance roster of {len(STUDENTS_STORE)} students"
-    }
-    AUDIT_LOGS.append(audit_entry)
 
-    # Sanitize records: no per-student 'Distracted' status exposed
-    sanitized_students = []
-    for s in STUDENTS_STORE.values():
-        sanitized_students.append({
-            "student_id": s["student_id"],
-            "student_name": s["student_name"],
-            "seat": s["seat"],
-            "joined_at": s["joined_at"],
-            "last_seen": s["last_seen"],
-            "attendance_status": (
-                "NETWORK_VERIFICATION_NEEDED" if s.get("status") in ["NETWORK_VERIFICATION_NEEDED", "PROXY_FLAGGED"]
-                else "ABSENT" if s.get("status") == "ABSENT"
-                else "VERIFIED_PRESENT"
-            ),
-            "marked_by": s.get("marked_by", "qr"),
-            "network_attested": s.get("network_attested", True),
-            "quiz_submitted": s.get("quiz_submitted", False),
-            "anomaly_flag": s.get("anomaly_flag")
-        })
+def visible_course(db, user, course_id):
+    course = db.get(CourseOffering, course_id)
+    allowed = course is not None and (course.teacher_id == user.id if user.role == "teacher" else db.get(Enrollment, (course_id, user.id)) is not None)
+    if not allowed:
+        raise HTTPException(404, "Course not found")
+    return course
 
-    return {
-        "session_id": ACTIVE_SESSION["session_id"],
-        "audit_id": audit_id,
-        "students": sanitized_students
-    }
 
-@app.get("/api/session/audit-logs")
-def get_audit_logs(_auth: str = Depends(require_instructor_auth)):
-    """
-    Returns audit trail of protected roster views.
-    """
-    return {"audit_logs": list(AUDIT_LOGS)}
+def visible_session(db, user, session_id):
+    session = db.get(ClassSession, session_id)
+    if session is None:
+        raise HTTPException(404, "Session not found")
+    visible_course(db, user, session.course_id)
+    return session
 
-@app.post("/api/attendance/punch-in", response_model=PunchInResponse)
-async def punch_in(req: PunchInRequest, request: Request):
-    client_ip = request.client.host if request.client else "127.0.0.1"
 
-    # 0a. Session must have been started by the instructor
-    if not ACTIVE_SESSION.get("is_active", False):
-        return PunchInResponse(
-            status="ERROR",
-            student_id=req.student_id,
-            student_name=req.student_name,
-            message="The instructor has not started the session yet. Please wait for the QR code on the projector."
-        )
+def session_view(db, user, session):
+    course = db.get(CourseOffering, session.course_id)
+    own = db.get(Attendance, (session.id, user.id)) if user.role == "student" else None
+    pending = db.scalar(select(PendingAttendance).where(PendingAttendance.session_id == session.id, PendingAttendance.student_id == user.id, PendingAttendance.resolved_at.is_(None))) if user.role == "student" else None
+    return {"id": session.id, "course_id": session.course_id, "course_title": course.title, "title": session.title, "room_code": session.room_code, "starts_at": utc(session.starts_at), "ends_at": utc(session.ends_at), "state": session.state, "attendance": attendance_view(own) if own else None, "pending_review": pending is not None}
 
-    # 0b. Student must be on the official enrolled roster
-    enrolled = ENROLLED_BY_ID.get(req.student_id.strip().upper())
-    if ENFORCE_ENROLLMENT:
-        if not enrolled:
-            return PunchInResponse(
-                status="ERROR",
-                student_id=req.student_id,
-                student_name=req.student_name,
-                message=f"Student ID '{req.student_id}' is not enrolled in this course. Contact your instructor."
-            )
-        if enrolled["student_name"].strip().lower() != req.student_name.strip().lower():
-            return PunchInResponse(
-                status="ERROR",
-                student_id=req.student_id,
-                student_name=req.student_name,
-                message="Name does not match the enrolled record for this Student ID."
-            )
-        # Normalise to canonical roster values
-        req.student_id = enrolled["student_id"]
-        req.student_name = enrolled["student_name"]
 
-    # 1. Validate Rolling TOTP (T_0 or T_-1)
-    if not verify_totp(req.totp_token):
-        return PunchInResponse(
-            status="ERROR",
-            student_id=req.student_id,
-            student_name=req.student_name,
-            message="Invalid or expired TOTP QR token. Please scan the current projector code."
-        )
-    
-    # 2. Evaluate Anomaly (On-device match, salted HMAC, or multi-AP room list)
-    is_anomaly, anomaly_reason = evaluate_punch_anomaly(
-        student_id=req.student_id,
-        bssid_match=req.bssid_match,
-        salted_bssid_hmac=req.salted_bssid_hmac,
-        reported_bssid=req.reported_bssid,
-        device_fingerprint=req.device_fingerprint,
-        client_ip=client_ip,
-        is_simulation=req.is_simulation
-    )
-    
-    now = time.time()
-    initial_status = "NETWORK_VERIFICATION_NEEDED" if is_anomaly else "FOCUSED"
-    seat_label = enrolled["seat"] if enrolled else f"Row {((hash(req.student_id) % 5) + 1)}, #{((hash(req.student_id) % 15) + 1):02d}"
-    
-    # DATA MINIMIZATION: Never persist raw BSSIDs or raw device identifiers.
-    # Persist the verification result only (network_attested, device_attested).
-    student_record = {
-        "student_id": req.student_id,
-        "student_name": req.student_name,
-        "seat": seat_label,
-        "network_attested": not is_anomaly,
-        "device_attested": True,
-        "status": initial_status,
-        "is_focused": not is_anomaly,
-        "joined_at": now,
-        "last_event": "NETWORK_VERIFICATION_NEEDED" if is_anomaly else "JOINED",
-        "last_seen": now,
-        "quiz_submitted": False,
-        "anomaly_flag": anomaly_reason
-    }
-    
-    STUDENTS_STORE[req.student_id] = student_record
-    
-    # 3. Create Session JWT and Credentials
-    jwt_token = create_session_jwt(req.student_id, req.student_name, ACTIVE_SESSION["session_id"])
-    
-    # 4. Notify WebSocket clients: emit aggregate metric updates (FERPA compliance)
-    await manager.broadcast({
-        "type": "AGGREGATE_METRICS_UPDATED",
-        "metrics": compute_aggregate_metrics()
-    })
-    
-    if is_anomaly:
-        return PunchInResponse(
-            status="NETWORK_VERIFICATION_NEEDED",
-            session_token=jwt_token,
-            session_secret=settings.SESSION_SECRET,
-            student_id=req.student_id,
-            student_name=req.student_name,
-            anomaly_flag=anomaly_reason,
-            message=anomaly_reason or "Network verification needed"
-        )
-    
-    return PunchInResponse(
-        status="FOCUSED",
-        session_token=jwt_token,
-        session_secret=settings.SESSION_SECRET,
-        student_id=req.student_id,
-        student_name=req.student_name,
-        message="Attendance attested and verified. Welcome to Lecture Mode."
-    )
+@app.get("/health/live")
+def live():
+    return {"status": "ok"}
 
-@app.post("/api/attendance/focus-event")
-async def record_focus_event(req: FocusEventRequest):
-    if req.student_id not in STUDENTS_STORE:
-        raise HTTPException(status_code=404, detail="Student not found in active session")
-    
-    student = STUDENTS_STORE[req.student_id]
-    now = time.time()
-    student["last_seen"] = now
-    
-    if req.event_type == "EVENT_FOCUS_LOST":
-        student["is_focused"] = False
-        student["last_event"] = "FOCUS_LOST"
-    elif req.event_type == "EVENT_FOCUS_RESTORED":
-        student["is_focused"] = True
-        student["last_event"] = "FOCUS_RESTORED"
-        
-    # Broadcast anonymized class-wide aggregate update (no student names or individual statuses)
-    await manager.broadcast({
-        "type": "AGGREGATE_METRICS_UPDATED",
-        "metrics": compute_aggregate_metrics()
-    })
-        
-    return {"ok": True, "focus_state": "registered"}
 
-@app.post("/api/session/pulse/trigger")
-async def trigger_pulse(req: PresencePulseTrigger):
-    """
-    Faculty broadcasts an unannounced 30s MCQ quiz to test actual in-room human presence.
-    """
-    quiz = MOCK_QUIZZES[0]
-    payload = {
-        "type": "PRESENCE_PULSE_START",
-        "quiz": quiz,
-        "duration_seconds": req.duration_seconds,
-        "triggered_at": time.time()
-    }
-    await manager.broadcast(payload)
-    return {"ok": True, "quiz_id": quiz["quiz_id"]}
-
-@app.post("/api/session/pulse/submit")
-async def submit_pulse(sub: QuizSubmission):
-    if sub.student_id in STUDENTS_STORE:
-        STUDENTS_STORE[sub.student_id]["quiz_submitted"] = True
-    
-    quiz = MOCK_QUIZZES[0]
-    is_correct = (sub.selected_option == quiz["correct_option"])
-    
-    await manager.broadcast({
-        "type": "QUIZ_SUBMITTED",
-        "student_id": sub.student_id,
-        "is_correct": is_correct
-    })
-    return {"ok": True, "is_correct": is_correct}
-
-@app.post("/api/attendance/override")
-async def override_attendance(
-    req: OverrideAttendanceRequest,
-    request: Request,
-    _auth: str = Depends(require_instructor_auth)
-):
-    """
-    Instructor manual override: removes network verification flag and sets
-    student status to VERIFIED_PRESENT (or instructor-chosen status).
-    Guarantees automated network anomaly flags NEVER permanently impact student attendance/grades.
-    Logs audit entry for FERPA and governance tracking.
-    """
-    if req.student_id not in STUDENTS_STORE:
-        raise HTTPException(status_code=404, detail="Student not found in active session")
-    
-    student = STUDENTS_STORE[req.student_id]
-    student["status"] = req.new_status
-    student["is_focused"] = True
-    student["anomaly_flag"] = None
-    student["last_event"] = f"OVERRIDDEN_BY_INSTRUCTOR: {req.reason}"
-    
-    client_ip = request.client.host if request.client else "unknown"
-    audit_id = f"aud_ovr_{int(time.time())}_{secrets.token_hex(4)}"
-    AUDIT_LOGS.append({
-        "id": audit_id,
-        "action": "MANUAL_OVERRIDE_RECORDED",
-        "actor": "instructor",
-        "timestamp": time.time(),
-        "ip_address": client_ip,
-        "detail": f"Instructor manually marked {req.student_id} as {req.new_status}. Reason: {req.reason}"
-    })
-    
-    await manager.broadcast({
-        "type": "ATTENDANCE_OVERRIDDEN",
-        "student_id": req.student_id,
-        "attendance_status": req.new_status,
-        "reason": req.reason,
-        "student": student
-    })
-    
-    return {
-        "ok": True,
-        "student_id": req.student_id,
-        "attendance_status": req.new_status,
-        "audit_id": audit_id
-    }
-
-@app.post("/api/attendance/mark")
-async def mark_attendance(
-    req: MarkAttendanceRequest,
-    request: Request,
-    _auth: str = Depends(require_instructor_auth)
-):
-    """
-    Teacher manual attendance marking (PRESENT / ABSENT) for any enrolled student,
-    e.g. a student whose phone is dead. Every mark is audit-logged.
-    """
-    status = req.status.upper()
-    if status in ("PRESENT", "VERIFIED_PRESENT"):
-        status = "VERIFIED_PRESENT"
-    elif status != "ABSENT":
-        raise HTTPException(status_code=400, detail="status must be PRESENT or ABSENT")
-
-    sid = req.student_id
-    if sid not in STUDENTS_STORE:
-        enrolled = ENROLLED_BY_ID.get(sid.upper())
-        if not enrolled:
-            raise HTTPException(status_code=404, detail="Student not enrolled in this course")
-        sid = enrolled["student_id"]
-        STUDENTS_STORE[sid] = {
-            "student_id": sid, "student_name": enrolled["student_name"], "seat": enrolled["seat"],
-            "status": "ABSENT", "is_focused": True, "network_attested": False, "device_attested": False,
-            "joined_at": 0, "last_event": "NOT_CHECKED_IN", "last_seen": 0,
-            "quiz_submitted": False, "anomaly_flag": None,
-        }
-
-    now = time.time()
-    student = STUDENTS_STORE[sid]
-    student["status"] = status
-    student["anomaly_flag"] = None
-    student["is_focused"] = True
-    student["marked_by"] = "instructor"
-    student["last_event"] = f"MARKED_{status}_BY_INSTRUCTOR"
-    if status == "VERIFIED_PRESENT" and not student.get("joined_at"):
-        student["joined_at"] = now
-        student["last_seen"] = now
-
-    audit_id = f"aud_mark_{int(now)}_{secrets.token_hex(4)}"
-    AUDIT_LOGS.append({
-        "id": audit_id,
-        "action": "MANUAL_ATTENDANCE_MARKED",
-        "actor": "instructor",
-        "timestamp": now,
-        "ip_address": request.client.host if request.client else "unknown",
-        "detail": f"Instructor marked {sid} as {status}. Reason: {req.reason}",
-    })
-
-    await manager.broadcast({
-        "type": "ATTENDANCE_OVERRIDDEN",
-        "student_id": sid,
-        "attendance_status": status,
-        "reason": req.reason,
-    })
-    await manager.broadcast({"type": "AGGREGATE_METRICS_UPDATED", "metrics": compute_aggregate_metrics()})
-    return {"ok": True, "student_id": sid, "attendance_status": status, "audit_id": audit_id}
-
-@app.post("/api/session/simulate-proxy")
-async def simulate_proxy_attack():
-    """
-    Faculty dashboard trigger to prove rogue proxy detection on stage.
-    """
-    rogue_student_id = f"ROGUE_{int(time.time()) % 1000}"
-    rogue_record = {
-        "student_id": rogue_student_id,
-        "student_name": "Rogue Proxy Bot",
-        "seat": "Remote / External",
-        "network_attested": False,
-        "status": "NETWORK_VERIFICATION_NEEDED",
-        "joined_at": time.time(),
-        "last_event": "NETWORK_VERIFICATION_NEEDED",
-        "last_seen": time.time(),
-        "quiz_submitted": False,
-        "anomaly_flag": "NETWORK_VERIFICATION_NEEDED: Synthetic Rogue Subnet / External BSSID"
-    }
-    STUDENTS_STORE[rogue_student_id] = rogue_record
-    
-    await manager.broadcast({
-        "type": "ANOMALY_DETECTED",
-        "student": rogue_record,
-        "status": "NETWORK_VERIFICATION_NEEDED",
-        "message": "NETWORK_VERIFICATION_NEEDED: Synthetic Rogue Subnet / External BSSID"
-    })
-    return {"ok": True, "simulated_student": rogue_record}
-
-@app.post("/api/session/end")
-async def end_session():
-    ACTIVE_SESSION["is_active"] = False
-    await manager.broadcast({"type": "SESSION_ENDED", "session_id": ACTIVE_SESSION["session_id"]})
-    return {"ok": True, "ended": True}
-
-# --- PROTECTED COURSE PORTAL ENDPOINTS (Guarded by SignedRequestGateMiddleware) ---
-
-@app.get("/api/course-portal/slides")
-def get_slides():
-    return {
-        "session_id": ACTIVE_SESSION["session_id"],
-        "course": MOCK_TIMETABLE["course_title"],
-        "slides": MOCK_SLIDES
-    }
-
-@app.get("/api/course-portal/timetable")
-def get_timetable():
-    return MOCK_TIMETABLE
-
-# --- DATA RETENTION POLICY & SCHEDULED CLEANUP JOB (Item 7) ---
-
-def cleanup_expired_records(retention_days: Optional[int] = None) -> Dict[str, Any]:
-    """
-    DATA RETENTION POLICY:
-    Automatically deletes attendance verification records and audit logs older than N days (default: 30 days).
-    Enforces privacy by design and prevents indefinite accumulation of attendance verification telemetry.
-    """
-    days = retention_days if retention_days is not None else settings.RETENTION_DAYS
-    cutoff = time.time() - (days * 86400)
-    
-    # 1. Purge expired student records
-    expired_student_ids = [
-        sid for sid, s in STUDENTS_STORE.items()
-        if s.get("joined_at", 0) and s.get("joined_at", 0) < cutoff
-    ]
-    for sid in expired_student_ids:
-        del STUDENTS_STORE[sid]
-        
-    # 2. Purge expired audit logs
-    initial_audit_count = len(AUDIT_LOGS)
-    AUDIT_LOGS[:] = [log for log in AUDIT_LOGS if log.get("timestamp", 0) >= cutoff]
-    purged_audit_count = initial_audit_count - len(AUDIT_LOGS)
-    
-    return {
-        "ok": True,
-        "retention_days": days,
-        "cutoff_timestamp": cutoff,
-        "students_purged": len(expired_student_ids),
-        "audit_logs_purged": purged_audit_count,
-        "remaining_students": len(STUDENTS_STORE),
-        "remaining_audit_logs": len(AUDIT_LOGS)
-    }
-
-@app.post("/api/session/retention/cleanup")
-def trigger_retention_cleanup(
-    retention_days: Optional[int] = None,
-    _auth: str = Depends(require_instructor_auth)
-):
-    """
-    Manual trigger / test endpoint for scheduled retention policy enforcement.
-    Protected by instructor authentication.
-    """
-    return cleanup_expired_records(retention_days)
-
-async def retention_cleanup_scheduler():
-    """Scheduled background job that executes the retention policy daily."""
-    while True:
-        try:
-            cleanup_expired_records()
-        except Exception:
-            pass
-        await asyncio.sleep(86400)  # Check daily
-
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(retention_cleanup_scheduler())
-
-# --- WEBSOCKET GATEWAY ---
-
-@app.websocket("/ws/session")
-async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+@app.get("/health/ready")
+def ready(db: Session = Depends(get_db)):
     try:
-        # Send public session snapshot: session info and AGGREGATE metrics only (FERPA compliant)
-        await websocket.send_text(json.dumps({
-            "type": "SESSION_SNAPSHOT",
-            "session": ACTIVE_SESSION,
-            "metrics": compute_aggregate_metrics()
-        }))
-        while True:
-            data = await websocket.receive_text()
-            try:
-                msg = json.loads(data)
-                # Handle client-relayed events if any
-                if msg.get("type") == "PING":
-                    await websocket.send_text(json.dumps({"type": "PONG", "time": time.time()}))
-            except Exception:
-                pass
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        revision = db.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        if revision != "0009":
+            raise ValueError("Schema revision mismatch")
+        cfg = settings()
+        if cfg.app_env == "production" and (not cfg.oidc_clients_configured or
+                min(len(cfg.qr_signing_key), len(cfg.policy_signing_key)) < 32 or
+                cfg.play_integrity_mode not in ("off", "optional", "required") or
+                cfg.face_check_mode not in ("off", "enrolled", "required") or
+                (cfg.face_check_mode != "off" and len(cfg.face_template_key) < 32)):
+            raise ValueError("Production identity or signing configuration missing")
+    except Exception:
+        raise HTTPException(503, "Database or schema unavailable")
+    return {"status": "ready"}
+
+
+@app.get("/internal/retention")
+def retention_job(request: Request, db: Session = Depends(get_db)):
+    from .retention import purge
+    secret = settings().cron_secret
+    header = request.headers.get("authorization", "")
+    if len(secret) < 16 or not secrets.compare_digest(header, f"Bearer {secret}"):
+        raise HTTPException(401, "Unauthorized")
+    return {"deleted": purge(db)}
+
+
+@app.get("/auth/config")
+def auth_config():
+    return {"development_login": settings().dev_auth_enabled,
+            "college_oidc": settings().oidc_clients_configured and not settings().dev_auth_enabled,
+            "issuer": settings().oidc_issuer if settings().oidc_configured else None,
+            "audience": settings().oidc_audience if settings().oidc_configured else None,
+            "authorization_endpoint": settings().oidc_authorization_endpoint if settings().oidc_configured else None,
+            "dashboard_client_id": settings().oidc_dashboard_client_id if settings().oidc_configured else None,
+            "dashboard_redirect_uri": settings().oidc_dashboard_redirect_uri if settings().oidc_configured else None,
+            "android_client_id": settings().oidc_android_client_id if settings().oidc_configured else None,
+            "android_redirect_uri": settings().oidc_android_redirect_uri if settings().oidc_configured else None}
+
+
+@app.post("/auth/dev-login")
+def dev_login(body: Login, db: Session = Depends(get_db)):
+    if not settings().dev_auth_enabled:
+        raise HTTPException(404, "Not found")
+    from .stage6 import rate_limit
+    rate_limit(db, "dev-login", body.email.strip().lower(), 10, 300)
+    db.commit()
+    valid_password = secrets.compare_digest(body.password.encode(), settings().dev_password.encode())
+    user = db.scalar(select(User).where(User.email == body.email.strip().lower(), User.is_demo.is_(True)))
+    if not valid_password or user is None:
+        raise HTTPException(401, "Invalid development credentials")
+    now = datetime.now(timezone.utc)
+    db.execute(delete(DevToken).where(DevToken.expires_at <= now))
+    token = secrets.token_urlsafe(32)
+    db.add(DevToken(digest=digest(token), user_id=user.id, expires_at=now + timedelta(hours=8)))
+    db.commit()
+    return {"access_token": token, "token_type": "bearer", "expires_in": 28800, "user": user_view(user)}
+
+
+@app.post("/auth/logout", status_code=204)
+def logout(user: User = Depends(current_user), credentials=Depends(bearer), db: Session = Depends(get_db)):
+    if settings().dev_auth_enabled:
+        db.execute(delete(DevToken).where(DevToken.digest == digest(credentials.credentials)))
+        db.commit()
+    return Response(status_code=204)
+
+
+@app.get("/me")
+def me(user: User = Depends(current_user)):
+    return user_view(user)
+
+
+@app.get("/courses")
+def courses(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    query = select(CourseOffering)
+    if user.role == "teacher":
+        query = query.where(CourseOffering.teacher_id == user.id)
+    else:
+        query = query.join(Enrollment).where(Enrollment.student_id == user.id)
+    return [course_view(c) for c in db.scalars(query.order_by(CourseOffering.id))]
+
+
+@app.get("/courses/{course_id}/roster")
+def roster(course_id: int, user: User = Depends(teacher), db: Session = Depends(get_db)):
+    visible_course(db, user, course_id)
+    return [user_view(u) for u in db.scalars(select(User).join(Enrollment, Enrollment.student_id == User.id).where(Enrollment.course_id == course_id).order_by(User.name))]
+
+
+@app.get("/sessions")
+def sessions(course_id: int | None = None, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    query = select(ClassSession).join(CourseOffering)
+    if user.role == "teacher":
+        query = query.where(CourseOffering.teacher_id == user.id)
+    else:
+        query = query.join(Enrollment, Enrollment.course_id == CourseOffering.id).where(Enrollment.student_id == user.id)
+    if course_id is not None:
+        visible_course(db, user, course_id)
+        query = query.where(ClassSession.course_id == course_id)
+    return [session_view(db, user, s) for s in db.scalars(query.order_by(ClassSession.starts_at))]
+
+
+@app.post("/sessions", status_code=201)
+def create_session(body: NewSession, user: User = Depends(teacher), db: Session = Depends(get_db)):
+    course = visible_course(db, user, body.course_id)
+    now = datetime.now(timezone.utc)
+    start, end = utc(body.starts_at), utc(body.ends_at)
+    if body.starts_at.tzinfo is None or body.ends_at.tzinfo is None:
+        raise HTTPException(422, "Session times must include a timezone")
+    if start < now - timedelta(minutes=5) or start > now + timedelta(days=365):
+        raise HTTPException(422, "Session start must be between now and one year ahead")
+    if end <= start or end - start > timedelta(hours=8):
+        raise HTTPException(422, "Session duration must be greater than zero and no more than eight hours")
+    from .stage6 import rate_limit
+    rate_limit(db, "session-create", str(user.id), 20, 3600)
+    row = ClassSession(course_id=course.id, title=body.title.strip(), starts_at=start,
+                       ends_at=end, state="ready", room_code=body.room_code)
+    if len(row.title) < 3:
+        raise HTTPException(422, "Session title must contain at least three characters")
+    db.add(row)
+    db.flush()
+    db.add(AdminAudit(actor_id=user.id, action="session_created", target_type="session",
+                      target_id=str(row.id), reason="Teacher scheduled class", recorded_at=now))
+    db.commit()
+    return session_view(db, user, row)
+
+
+@app.get("/sessions/{session_id}")
+def session_details(session_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    return session_view(db, user, visible_session(db, user, session_id))
+
+
+@app.get("/attendance/me")
+def history(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    if user.role != "student":
+        raise HTTPException(403, "Student role required")
+    rows = db.scalars(select(Attendance).where(Attendance.student_id == user.id).order_by(Attendance.updated_at.desc()))
+    return [{**attendance_view(a), "session": session_view(db, user, db.get(ClassSession, a.session_id))} for a in rows]
+
+
+@app.get("/sessions/{session_id}/attendance")
+def session_attendance(session_id: int, user: User = Depends(teacher), db: Session = Depends(get_db)):
+    visible_session(db, user, session_id)
+    return [attendance_view(a) for a in db.scalars(select(Attendance).where(Attendance.session_id == session_id).order_by(Attendance.student_id))]
+
+
+@app.put("/sessions/{session_id}/attendance/{student_id}")
+def confirm(session_id: int, student_id: int, body: Confirmation, user: User = Depends(teacher), db: Session = Depends(get_db)):
+    session = visible_session(db, user, session_id)
+    if db.get(Enrollment, (session.course_id, student_id)) is None:
+        raise HTTPException(404, "Enrolled student not found")
+    if utc(session.starts_at) > datetime.now(timezone.utc):
+        raise HTTPException(409, "Attendance can be confirmed once the session starts")
+    # Serialize confirmations per session, including creation of a previously absent row.
+    db.execute(select(ClassSession).where(ClassSession.id == session_id).with_for_update()).scalar_one()
+    row = db.get(Attendance, (session_id, student_id))
+    previous = row.status if row else None
+    pending = db.scalar(select(PendingAttendance).where(PendingAttendance.session_id == session_id, PendingAttendance.student_id == student_id, PendingAttendance.resolved_at.is_(None)))
+    if previous == body.status and row.method == "teacher_confirmed":
+        return attendance_view(row)
+    if (previous is not None or pending is not None) and (body.reason is None or len(body.reason.strip()) < 10):
+        raise HTTPException(422, "A correction or pending-review reason of at least 10 characters is required")
+    if row is None:
+        row = Attendance(session_id=session_id, student_id=student_id, course_id=session.course_id)
+        db.add(row)
+    row.status = body.status
+    row.method = "teacher_confirmed"
+    row.confirmed_by = user.id
+    row.updated_at = datetime.now(timezone.utc)
+    db.add(AttendanceEvent(session_id=session_id, student_id=student_id, actor_id=user.id, action="correction" if previous is not None else "teacher_confirmed", previous_status=previous, new_status=body.status, reason=body.reason.strip() if body.reason else None, recorded_at=row.updated_at))
+    if pending:
+        pending.resolved_at = row.updated_at
+        pending.resolved_by = user.id
+    db.commit()
+    return attendance_view(row)
+
+
+from .stage2 import router as stage2_router  # noqa: E402
+app.include_router(stage2_router)
+from .stage3 import router as stage3_router  # noqa: E402
+app.include_router(stage3_router)
+from .stage5 import router as stage5_router  # noqa: E402
+app.include_router(stage5_router)
+from .stage6 import router as stage6_router  # noqa: E402
+app.include_router(stage6_router)
+from .face import router as face_router  # noqa: E402
+app.include_router(face_router)

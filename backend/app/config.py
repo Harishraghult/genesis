@@ -1,32 +1,55 @@
-import os
+from functools import lru_cache
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-class Settings:
-    PROJECT_NAME: str = "FocusLock"
-    PROJECT_VERSION: str = "1.0.0"
-    
-    # Cryptographic & Auth keys
-    INSTRUCTOR_KEY: str = os.getenv("FL_INSTRUCTOR_KEY", "dev-instructor-key")
-    JWT_SECRET: str = os.getenv("FL_JWT_SECRET", "super-secret-focuslock-jwt-key-2026")
-    JWT_ALGORITHM: str = "HS256"
-    TOTP_SECRET: str = os.getenv("FL_TOTP_SECRET", "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
-    SESSION_SECRET: str = os.getenv("FL_SESSION_SECRET", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
-    
-    # Class environment settings: multiple APs per room (avoids false positives during roaming)
-    TOTP_STEP_SECONDS: int = 15
-    SIG_MAX_SKEW_SECONDS: int = 30
-    TARGET_BSSID: str = os.getenv("FL_TARGET_BSSID", "BSSID_ROOM_302")
-    TARGET_ROOM_BSSIDS: list[str] = [
-        "BSSID_ROOM_302",
-        "BSSID_ROOM_302_AP2",
-        "BSSID_ROOM_302_5G",
-        "BSSID_ROOM_302_EAST",
-    ]
-    TARGET_CLASSROOM_NETS: list[str] = ["127.0.0.1/32", "192.168.0.0/16", "10.0.0.0/8"]
-    EMERGENCY_NUMBER: str = os.getenv("FL_EMERGENCY_NUMBER", "112")
-    SESSION_SALT: str = os.getenv("FL_SESSION_SALT", "fl_salt_2026_room302_privacy")
-    RETENTION_DAYS: int = int(os.getenv("FL_RETENTION_DAYS", "30"))
-    
-    # Development bypass flags
-    DEV_MODE: bool = True
 
-settings = Settings()
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    database_url: str = ""
+    app_env: str = "production"
+    enable_dev_auth: bool = False
+    dev_password: str = ""
+    qr_signing_key: str = ""
+    policy_signing_key: str = ""
+    resource_allowed_hosts: str = ""
+    ble_token_key: str = ""
+    dev_receiver_token: str = ""
+    oidc_issuer: str = ""
+    oidc_audience: str = ""
+    oidc_jwks_url: str = ""
+    oidc_authorization_endpoint: str = ""
+    oidc_token_endpoint: str = ""
+    oidc_dashboard_client_id: str = ""
+    oidc_dashboard_redirect_uri: str = ""
+    oidc_android_client_id: str = ""
+    oidc_android_redirect_uri: str = ""
+    play_integrity_mode: str = "off"
+    play_integrity_package: str = ""
+    play_integrity_service_account_file: str = ""
+    play_integrity_service_account_json: str = ""
+    cron_secret: str = ""
+    retention_event_days: int = 30
+    retention_sighting_days: int = 7
+    retention_credential_days: int = 1
+    cors_origins: str = "http://localhost:5173"
+    face_template_key: str = ""
+    face_check_mode: str = "enrolled"  # off | enrolled | required
+
+    @property
+    def dev_auth_enabled(self) -> bool:
+        return self.app_env == "development" and self.enable_dev_auth and bool(self.dev_password)
+
+    @property
+    def oidc_configured(self) -> bool:
+        return bool(self.oidc_issuer.startswith("https://") and self.oidc_audience and self.oidc_jwks_url.startswith("https://"))
+
+    @property
+    def oidc_clients_configured(self) -> bool:
+        return bool(self.oidc_configured and self.oidc_authorization_endpoint.startswith("https://") and
+            self.oidc_token_endpoint.startswith("https://") and self.oidc_dashboard_client_id and
+            self.oidc_dashboard_redirect_uri.startswith("https://") and self.oidc_android_client_id and
+            self.oidc_android_redirect_uri == "focuslock://oidc/callback")
+
+
+@lru_cache
+def settings() -> Settings:
+    return Settings()

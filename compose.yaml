@@ -1,0 +1,65 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Copy .env.example to .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Copy .env.example to .env}
+      POSTGRES_DB: ${POSTGRES_DB:?Copy .env.example to .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 3s
+      retries: 15
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      APP_ENV: ${APP_ENV:-production}
+      ENABLE_DEV_AUTH: ${ENABLE_DEV_AUTH:-false}
+      DEV_PASSWORD: ${DEV_PASSWORD:-}
+      QR_SIGNING_KEY: ${QR_SIGNING_KEY:-}
+      POLICY_SIGNING_KEY: ${POLICY_SIGNING_KEY:-}
+      BLE_TOKEN_KEY: ${BLE_TOKEN_KEY:-}
+      DEV_RECEIVER_TOKEN: ${DEV_RECEIVER_TOKEN:-}
+      RESOURCE_ALLOWED_HOSTS: ${RESOURCE_ALLOWED_HOSTS:-}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
+      OIDC_AUTHORIZATION_ENDPOINT: ${OIDC_AUTHORIZATION_ENDPOINT:-}
+      OIDC_TOKEN_ENDPOINT: ${OIDC_TOKEN_ENDPOINT:-}
+      OIDC_DASHBOARD_CLIENT_ID: ${OIDC_DASHBOARD_CLIENT_ID:-}
+      OIDC_DASHBOARD_REDIRECT_URI: ${OIDC_DASHBOARD_REDIRECT_URI:-}
+      OIDC_ANDROID_CLIENT_ID: ${OIDC_ANDROID_CLIENT_ID:-}
+      OIDC_ANDROID_REDIRECT_URI: ${OIDC_ANDROID_REDIRECT_URI:-}
+      PLAY_INTEGRITY_MODE: ${PLAY_INTEGRITY_MODE:-off}
+      PLAY_INTEGRITY_PACKAGE: ${PLAY_INTEGRITY_PACKAGE:-}
+      PLAY_INTEGRITY_SERVICE_ACCOUNT_JSON: ${PLAY_INTEGRITY_SERVICE_ACCOUNT_JSON:-}
+      CRON_SECRET: ${CRON_SECRET:-}
+      RETENTION_EVENT_DAYS: ${RETENTION_EVENT_DAYS:-30}
+      RETENTION_SIGHTING_DAYS: ${RETENTION_SIGHTING_DAYS:-7}
+      RETENTION_CREDENTIAL_DAYS: ${RETENTION_CREDENTIAL_DAYS:-1}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      FACE_TEMPLATE_KEY: ${FACE_TEMPLATE_KEY:-}
+      FACE_CHECK_MODE: ${FACE_CHECK_MODE:-enrolled}
+    ports:
+      - '127.0.0.1:8000:8000'
+    depends_on:
+      db:
+        condition: service_healthy
+    command: [sh, -c, 'alembic upgrade head && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log']
+    healthcheck:
+      test: [CMD, python, -c, 'import urllib.request; urllib.request.urlopen("http://localhost:8000/health/ready")']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+  dashboard:
+    build: ./dashboard
+    ports:
+      - '127.0.0.1:5173:80'
+    depends_on:
+      api:
+        condition: service_healthy
+volumes:
+  postgres_data:

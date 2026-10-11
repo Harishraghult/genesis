@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- The classroom server is usually a laptop on the LAN with plain HTTP.
-     Integrity comes from the HMAC request signatures; for real deployments use HTTPS. -->
-<network-security-config>
-    <base-config cleartextTrafficPermitted="true" />
-</network-security-config>

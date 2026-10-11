@@ -1,0 +1,84 @@
+name: FocusLock checks
+on: [push, pull_request]
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: focuslock
+          POSTGRES_PASSWORD: local-test
+          POSTGRES_DB: focuslock
+        ports: ['5432:5432']
+        options: --health-cmd="pg_isready -U focuslock" --health-interval=5s --health-timeout=3s --health-retries=10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
+      - name: PostgreSQL migration and seed smoke test
+        env:
+          DATABASE_URL: postgresql+psycopg://focuslock:local-test@localhost:5432/focuslock
+          APP_ENV: development
+          ENABLE_DEV_AUTH: 'true'
+          DEV_PASSWORD: ci-demo-only
+          QR_SIGNING_KEY: ci-only-qr-signing-key-change-before-deployment-2026
+          POLICY_SIGNING_KEY: ci-only-policy-signing-key-change-before-deployment-2026
+          BLE_TOKEN_KEY: ci-only-ble-key-change-before-deployment-2026
+          DEV_RECEIVER_TOKEN: ci-only-receiver-token
+          RESOURCE_ALLOWED_HOSTS: college.example.edu,docs.college.example.edu
+        run: |
+          alembic upgrade head
+          alembic check
+          python -m app.seed
+          python -m app.seed
+          python -m scripts.smoke
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci
+      - run: npm run build
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: bash gradlew :app:assembleDebug :app:lintDebug :app:testDebugUnitTest :app:compileReleaseKotlin
+      - run: bash gradlew :app:compileDebugKotlin -PENABLE_LOCAL_VPN=true -PENABLE_BLE_PRESENCE=true
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install pip-audit
+      - run: python -m pip_audit -r backend/requirements.txt
+      - run: npm ci && npm audit --audit-level=high
+        working-directory: dashboard

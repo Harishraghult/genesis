@@ -1,130 +1,33 @@
 # FocusLock
 
-A session-scoped, secure classroom companion and attendance verification client designed for college lecture environments.
+FocusLock is a privacy-first classroom attendance and voluntary focus application. The monorepo contains a FastAPI/PostgreSQL backend (`backend/`), a React/TypeScript teacher dashboard (`dashboard/`), a Kotlin/Jetpack Compose Android app (`android/`), and Alembic migrations. A QR check-in is participation evidence, not verified physical presence. Teacher-confirmed attendance works without optional VPN or Bluetooth, and leaving focus never changes attendance.
 
-FocusLock couples an instructor-controlled FastAPI backend with an Android companion app to provide verified attendance, access to restricted lecture materials, and temporary, consent-based focus enforcement.
+## Local demo
 
----
+Install Docker Desktop with Compose. Copy `.env.example` to `.env` (`Copy-Item .env.example .env` in PowerShell), then run `docker compose up --build`. Open the dashboard at `http://localhost:5173`, API docs at `http://localhost:8000/docs`, and readiness at `http://localhost:8000/health/ready`. The API runs migrations `0001`–`0009` and seeds only an empty development database. Docker Compose is for local development. After changing the dashboard or API, run `docker compose up -d --build api dashboard` and refresh the page to load the new images. The teacher dashboard includes a session scheduler, live QR overview, searchable roster, attendance corrections, approved resource links, and an activity/review area.
 
-## Architecture Overview
+All demo accounts use `DEV_PASSWORD` from `.env`: `teacher@focuslock.test`, `teacher2@focuslock.test`, `student@focuslock.test`, `student2@focuslock.test`, `student3@focuslock.test`, and `admin@focuslock.test`. The optional simulated classroom receiver uses `DEV_RECEIVER_TOKEN` and receiver ID `11111111-1111-4111-8111-111111111111`. It is a test fixture, not real hardware evidence. To refresh expired seeded classes, `docker compose down --volumes` removes the demo database, then `docker compose up --build` creates it again.
 
-```
-focuslock/
-  backend/
-    main.py             FastAPI application (sessions, TOTP codes, check-in, signed gate)
-    conftest.py         Pytest fixtures and test harnesses
-    test_gate.py        23 gate security tests (TOTP, HMAC, replay, subnet verification)
-    test_vpn.py         VPN reporting, vpn_* events, presence accounting tests
-    make_vectors.py     Signer test vector generator
-    test_vectors.json   Canonical HMAC-SHA256 test vectors
-    test_vectors.py     Pytest verifying Python reproduces test vectors
-    sim_client.py       CLI simulation client for testing live endpoints
-    demo.py             End-to-end interactive classroom session walkthrough
-    requirements.txt    Backend Python dependencies
-  android/
-    app/src/main/
-      java/edu/focuslock/
-        MainActivity.kt       Single-Activity UI (Check-in, VPN consent, locked WebView)
-        FocusVpnService.kt    Blackhole VpnService (IPv4 + IPv6 default routes, self-excluded)
-        Net.kt                OkHttp API client, SigningInterceptor, ClassroomNetwork (Wi-Fi pin)
-        Signer.kt             Pure JVM-compatible HMAC-SHA256 and SHA-256 routines
-      res/                    Layouts, themes, strings, network security configs
-      AndroidManifest.xml     Permissions, BIND_VPN_SERVICE, systemExempted FGS type
-    app/src/test/
-      java/edu/focuslock/
-        SignerTest.kt         JUnit test asserting Signer.kt matches test_vectors.json
-    TESTING.md                Manual test plan on real Android devices
-  README.md
-  LIMITATIONS.md
-```
+In Android Studio, open `android/` with JDK 17 or 21 and Android SDK 35. On this prepared Windows workspace, close any existing Android Studio window and run `..\Open-FocusLock-Android-Studio.cmd` from this repository directory; it launches Studio with the cached Gradle distribution. In Studio's Gradle settings, choose the cached JDK 17 directory printed by the helper. The debug API origin defaults to `http://10.0.2.2:8000` for the emulator. That address does not work on a physical phone. For a USB-connected phone, run `..\Run-FocusLock-Phone.cmd` from this repository directory after enabling USB debugging. It applies `adb reverse tcp:8000 tcp:8000`, builds the debug app with `-PAPI_BASE_URL=http://127.0.0.1:8000`, installs it and launches it. Reconnect the tunnel after unplugging or restarting the phone. The debug build defaults to **no VPN and no BLE**. To exercise both local experimental features, compile with `-PENABLE_LOCAL_VPN=true -PENABLE_BLE_PRESENCE=true`; no external credentials are needed for the ordinary attendance flow. The release build hard-disables both features and omits the VPN service. Do not distribute a VPN build before the actual use passes Google Play policy review.
 
----
+On Android, a focus disclosure appears immediately after the student scans a classroom QR. If accepted, the signed QR check-in proceeds and voluntary focus starts when that class becomes active while the app is open; there is no separate auto-focus setup prompt. If declined, QR attendance is not granted automatically and the app sends a pending teacher-review request. The teacher can confirm attendance without focus, and declining never auto-marks absence. The student can Pause focus locally, including offline. Ending focus early needs the teacher's current rotating QR (scanned in the app) or the teacher's approval from the dashboard, so it needs a connection; the signed policy still expires on its own. While focus is active the focus screen hides the Today/History bar and Back to session, and Back shows a warning (Android cannot stop Home, swipe-away or force-stop; closing the app does not end focus and can send a review flag). When the teacher ends the session, each student's app turns focus off within about five seconds while it can reach the server, or on next open. Doing any of this does not revoke existing attendance. If the app is closed or has no connection when the teacher activates a session, auto-start waits until the student opens it and the server can issue a policy.
 
-## Key Features
+Android 10+ also offers optional automatic quiet mode: tap **Set up automatic DND** on Today's classes, read the disclosure, and grant Android's separate Do Not Disturb access. Android 13+ also asks for notification permission so the foreground status has a visible **Stop quiet mode** action. Future active sessions activate FocusLock's own DND rule while the app is open, including when auto focus starts. The rule stops on the signed local deadline (at most 45 minutes), session end when refreshed, sign-out, reboot, or **Stop quiet mode now**; an elapsed-time alarm backs up the foreground service. Other DND rules are untouched. Android/user DND exceptions decide which calls and messages alert; check them before use. Quiet mode is separate from attendance and voluntary focus, and its expiry does not mark anyone absent. Physical-device testing of DND access, notification action, system battery restrictions and call/message alerts is still required.
 
-1. **Rotating 6-Digit TOTP & Device Attestation**:
-   - Instructors project a rotating code refreshed every 15 seconds.
-   - Student apps check in using the TOTP code and an enrolled device key (`HMAC-SHA256` device signature).
-   - Server enforces that check-ins originate exclusively from the classroom subnet (`FL_CLASSROOM_NETS`).
+During an **active voluntary focus** session, moving FocusLock into the background with the screen on can show a local reminder to return or Pause/Exit and send a minimal `backgrounded` event for teacher review. It is suppressed for screen-off, the app's explicit Exit, its phone/message shortcuts and expected permission screens. The event contains no destination app or reason; it is not a misconduct finding and never changes attendance. The teacher dashboard opens a visible review pop-up and can play a sound while open after the teacher clicks **Enable focus alert sound** (which plays a test tone). If browser notification permission is granted, it also shows a browser notification. These are open-dashboard alerts, not background push delivery. Browser audio settings, network outages or an app process that has stopped can prevent delivery; no event means status unknown. Android notification settings or DND may also suppress the student reminder. Physical-device testing is needed for Home/Recents, screen-off, calls and messages.
 
-2. **Per-Session Cryptographic Signing**:
-   - Every request to `/portal/*` and `/api/client/*` is signed:
-     ```
-     Sig = HMAC-SHA256(secret, METHOD + "\n" + path_with_query + "\n" + ts + "\n" + nonce + "\n" + sha256_hex(body))
-     ```
-   - Headers: `X-FL-Session`, `X-FL-Student`, `X-FL-Ts`, `X-FL-Nonce`, `X-FL-Sig`.
-   - The server enforces replay protection, timestamp freshness (within 30 seconds), path/query integrity, body checksums, and client IP subnet rules.
+Teachers start a session, show the rotating QR, view check-ins, attach college-authorized PDF/text URLs from exact hosts in `RESOURCE_ALLOWED_HOSTS`, and can confirm or correct attendance with an audit reason. The Android viewer checks HTTPS redirects and only saves a resource in app-private storage after an explicit download action. Students can view their attendance and submit correction/deletion requests. Student requests require human review; an accepted request does not silently alter attendance or bypass institutional retention policy.
 
-3. **Session-Scoped Local VPN Restriction**:
-   - **Temporary & Consent-Based**: Prior to enabling the VPN, a plain-language consent screen informs the student about what is blocked (other apps' internet) and what is not seen.
-   - **Blackhole Routing**: Registers `0.0.0.0/0` (IPv4) and `::/0` (IPv6) default routes. Packets from other apps (Instagram, YouTube, WhatsApp) are routed into a local tun interface and immediately discarded.
-   - **FocusLock Excluded**: FocusLock is excluded via `addDisallowedApplication(packageName)`, letting it communicate with the class portal and server normally.
-   - **No Traffic Inspection**: Packet contents, destinations, and DNS lookups are never inspected, stored, logged, or forwarded anywhere.
-   - **Revoke Detection**: If the student turns off the VPN in system settings, `onRevoke()` detects it and reports `vpn_revoked` to the server.
+Voluntary focus can only start after a completed QR check-in, plus the face match for a student whose face staff recorded; the server refuses a focus policy otherwise and the app has no manual Start button. After the first QR scan, a student whose face staff recorded must pass an on-device face check (blink plus match) before check-in; failures go to teacher review. Staff record faces in the Android app with their own teacher or admin account. Leaving the app during focus locks it until the teacher approves, and every request or alert appears in the dashboard's Notifications card. These are evidence for the teacher, not proof of identity. See [Face verification](docs/FACE_VERIFICATION.md) for limits, the model licence and the privacy checklist.
 
-4. **Mobile Data Mitigation**:
-   - Both cellular data leakage (apps bypassing Wi-Fi) and captive Wi-Fi fallback issues (where Android routes requests away from Wi-Fi because it has no internet) are handled:
-     - All device traffic is caught by the VPN's default routes.
-     - FocusLock's own process is bound to the classroom Wi-Fi via `ConnectivityManager.bindProcessToNetwork`, ensuring attendance and portal traffic reach the local server even if mobile data is toggled on.
+## Production integration
 
-5. **Lifecycle & Emergency Guarantees**:
-   - Session teardown and VPN deactivation occur immediately when:
-     - Server returns HTTP 410 (session ended).
-     - Student taps **Exit** (`/api/client/leave` called first, then VPN stops).
-     - Student taps **Emergency 112** (**VPN stops first locally**, dialer opens immediately).
-     - App process is destroyed or crashes (`onDestroy`).
-     - Session duration expires (`ends_at` client safety timer).
+The application is **not live-deployed**. The user selected Vercel as the cloud target and signed in to an account, but confirmed that managed PostgreSQL and college OIDC details are not ready. [`vercel.json`](vercel.json) prepares a same-origin dashboard and FastAPI service at `/api` plus a daily retention invocation; PostgreSQL must come from a managed provider. Vercel Services is in beta, and this configuration has not been deployed. See [Vercel deployment](docs/VERCEL_DEPLOYMENT.md) for secrets, migration, college OIDC and validation steps. `.env.production.example` is a template; never store filled secrets in Git. Production dev login is disabled and `/health/ready` fails closed until OIDC clients and signing secrets are configured. No real OIDC issuer, Play Integrity project, managed database, or Google Play review was available here, so those external integrations are not claimed as validated.
 
----
+College authentication uses authorization-code PKCE in the dashboard and Android browser, then the backend verifies a signed RS256 API access token against the configured issuer, audience, expiry and JWKS. Roles come from provisioned database users, not token claims. The first admin must be provisioned by an operator with a verified OIDC subject; subsequent users require admin access. Play Integrity is configurable as `off`, `optional`, or `required` for device registration and QR check-in. A server-provided request hash binds the token to the exact action/challenge; replay is rejected. Unsupported devices retain teacher-confirmed attendance. Integrity does not prove identity, classroom presence or absence of cheating.
 
-## Privacy Note
+See [Stage 4 VPN and device checklist](docs/STAGE4_VPN.md), [Stage 5 Bluetooth protocol](docs/STAGE5_BLE.md), [Stage 6 security and privacy](docs/STAGE6_SECURITY.md), [QR protocol](docs/QR_PROTOCOL.md), and [Stage 3 content/focus protocol](docs/STAGE3_PROTOCOL.md).
 
-FocusLock is built on zero-trust principles without surveillance:
-- **No Packet Inspection**: The local VPN drops packets from other applications without reading headers, payloads, DNS queries, or destinations.
-- **Minimal Telemetry**: Server logging is strictly confined to:
-  - Attendance timestamps (checked in, last seen, leave time).
-  - Calculated presence seconds (based on heartbeat interval gaps).
-  - Coarse client lifecycle events (`vpn_started`, `vpn_stopped`, `vpn_revoked`, `vpn_declined`, `unpinned`, `pause`, `resume`).
-- **No Personal Data Collection**: No browsing history, no list of installed apps, no GPS location, and no persistent device IP addresses are saved.
+## Checks
 
----
-
-## Quick Start (Backend)
-
-1. **Install Dependencies**:
-   ```bash
-   cd focuslock/backend
-   pip install -r requirements.txt
-   ```
-
-2. **Run Tests**:
-   ```bash
-   python -m pytest -q
-   # Runs test_gate.py (23 tests), test_vpn.py (12 tests), test_vectors.py (3 tests)
-   # Total: 45 passed
-   ```
-
-3. **Generate Signer Test Vectors**:
-   ```bash
-   python make_vectors.py
-   ```
-
-4. **Run the Interactive Demo**:
-   ```bash
-   python demo.py
-   ```
-
-5. **Start the Live Server**:
-   ```bash
-   python -m uvicorn main:app --host 0.0.0.0 --port 8000
-   ```
-
----
-
-## Android Client Setup
-
-1. Open `focuslock/android` in Android Studio (JBR / JDK 17+ recommended).
-2. Sync the project with Gradle.
-3. Run JUnit tests: `SignerTest` validates compatibility with `backend/test_vectors.json`.
-4. Build APK: `./gradlew assembleDebug`.
-5. Refer to [`android/TESTING.md`](android/TESTING.md) for the manual test plan on physical hardware.
+From `backend/`: `pip install -r requirements.txt && python -m pytest -q`. With Compose running, run `docker compose exec api alembic check` and `docker compose exec api python -m scripts.smoke` against a fresh demo database. From `dashboard/`: `npm ci && npm run build`. From `android/`: `gradlew.bat :app:compileDebugKotlin :app:compileReleaseKotlin` (or `./gradlew`). CI also assembles, lints and runs Android unit tests and performs Python/npm dependency audits. See [current verification](docs/STAGE6_VERIFICATION.md) for what actually ran here and what still requires a physical device or external credentials.
