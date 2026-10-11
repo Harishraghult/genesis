@@ -8,10 +8,24 @@ export async function POST(req: NextRequest) {
     syncFromDisk();
     const body = await req.json();
     const studentId = String(body.student_id || "").trim().toUpperCase();
+    const studentName = String(body.student_name || "").trim() || studentId;
     const eventType = body.event_type;
     const detail = String(body.detail || "App switch / focus lost").trim();
 
-    const student = STUDENTS_MAP.get(studentId);
+    let student = STUDENTS_MAP.get(studentId);
+    if (!student && studentId) {
+      student = {
+        student_id: studentId,
+        student_name: studentName,
+        seat: "General",
+        attendance_status: "VERIFIED_PRESENT",
+        is_focused: true,
+        leave_count: 0,
+        joined_at: Date.now() / 1000,
+        last_seen: Date.now() / 1000,
+      };
+      STUDENTS_MAP.set(studentId, student);
+    }
     let alertCreated = null;
 
     if (student) {
