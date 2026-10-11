@@ -10,7 +10,7 @@ Set `JAVA_HOME` and the Android SDK as in [Windows setup](WINDOWS_SETUP.md), the
 .\gradlew.bat :app:assembleDebug -PAPI_BASE_URL=https://focuslock-30o1.onrender.com/api -PABI_FILTERS=arm64-v8a
 ```
 
-`-PABI_FILTERS=arm64-v8a` keeps only the code for 64-bit ARM phones (almost every current Android phone), which roughly halves the APK. Omit it for a universal APK (needed for x86 emulators). The APK is at `appuild\outputspk\debugpp-debug.apk`.
+`-PABI_FILTERS=arm64-v8a` keeps only the code for 64-bit ARM phones (almost every current Android phone), which roughly halves the APK. Omit it for a universal APK (needed for x86 emulators). The APK is at `app\build\outputs\apk\debug\app-debug.apk`.
 
 ## Publish it
 
