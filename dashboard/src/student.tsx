@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, date, stateLabel } from './api';
 import { checkIn } from './device';
 import { QrScanner } from './scanner';
+import { FaceCamera } from './faceui';
 
 type User = { id: number; name: string; email: string; role: string };
 type Auth = { access_token: string; user: User };
@@ -129,6 +130,51 @@ function Today({ auth, onOpen, onExpired }: { auth: Auth; onOpen: (id: number) =
   </section>;
 }
 
+type CheckResult = { ok: true; duplicate: boolean } | { ok: false; message: string; review?: boolean };
+
+/** QR check-in, adding the server-side face check when the student has a recorded face. */
+function useCheckInFlow(auth: Auth) {
+  const token = auth.access_token;
+  const pass = useRef<{ token: string; until: number } | null>(null);
+  const [face, setFace] = useState<{ qr: string; failures: number; resolve: (result: CheckResult) => void } | null>(null);
+
+  async function finish(qr: string, faceToken?: string): Promise<CheckResult> {
+    try { return { ok: true, duplicate: (await checkIn(auth.user.id, token, qr, faceToken)).duplicate }; }
+    catch (e) {
+      if (e instanceof ApiError && e.status === 410 && faceToken)
+        return { ok: false, message: 'Face verified. The class QR changed while you were checking; scan it once more to finish. No face check is needed for the next 2 minutes.' };
+      const message = (e as Error).message;
+      if (/Face enrollment is required/i.test(message)) return { ok: false, message: 'No face is recorded for you yet. Ask your administrator to record it, or ask your teacher to confirm your attendance.', review: true };
+      return { ok: false, message };
+    }
+  }
+  async function run(qr: string): Promise<CheckResult> {
+    const status = await api<{ mode: string; enrolled: boolean }>('/face/templates/me', token).catch(() => ({ mode: 'off', enrolled: false }));
+    if (status.mode === 'off' || !status.enrolled) return finish(qr);
+    if (pass.current && pass.current.until > Date.now()) return finish(qr, pass.current.token);
+    return new Promise(resolve => setFace({ qr, failures: 0, resolve }));
+  }
+  async function verified(template: number[]) {
+    const current = face!;
+    const result = await api<{ match: boolean; face_token?: string }>('/face/verify', token, { method: 'POST', body: JSON.stringify({ template, model: 'sface-2021dec' }) })
+      .catch((e: Error) => ({ match: false, error: e.message }));
+    if (result.match && 'face_token' in result && result.face_token) {
+      pass.current = { token: result.face_token, until: Date.now() + 110_000 };
+      setFace(null);
+      current.resolve(await finish(current.qr, result.face_token));
+    } else if (current.failures + 1 >= 3) {
+      setFace(null);
+      current.resolve({ ok: false, message: 'Your face did not match after three tries. Ask your teacher to confirm your attendance.', review: true });
+    } else setFace({ ...current, failures: current.failures + 1 });
+  }
+  const modal = face && <FaceCamera key={face.failures} title="Confirm it is you" blink frames={3}
+    intro="Look at the camera and blink once. FocusLock compares your face with the record your college made."
+    extra={face.failures > 0 ? <p className="error" role="alert">That did not match. Try again ({face.failures} of 3).</p> : undefined}
+    onTemplate={template => void verified(template)}
+    onCancel={() => { face.resolve({ ok: false, message: 'Face check cancelled. Scan again when you are ready, or ask your teacher.' }); setFace(null); }}/>;
+  return { run, modal };
+}
+
 function SessionView({ auth, sessionId, onBack, onExpired }: { auth: Auth; sessionId: number; onBack: () => void; onExpired: () => void }) {
   const token = auth.access_token;
   const { data: session, error: loadError, refresh } = usePoll(() => api<ClassSession>(`/sessions/${sessionId}`, token), onExpired, 4000);
@@ -140,17 +186,15 @@ function SessionView({ auth, sessionId, onBack, onExpired }: { auth: Auth; sessi
   const [reason, setReason] = useState('');
   useEffect(() => { api<Resource[]>(`/sessions/${sessionId}/resources`, token).then(setResources).catch(() => setResources([])); }, [sessionId, token, session?.state]);
 
+  const flow = useCheckInFlow(auth);
   async function scanned(qr: string) {
     setStep('idle'); setBusy(true); setError(''); setNotice('Checking you in…');
     try {
-      const result = await checkIn(auth.user.id, token, qr);
-      setNotice(result.duplicate ? 'You were already checked in.' : 'Checked in. Your attendance is recorded as present.');
-      await refresh();
-    } catch (e) {
-      setNotice('');
-      const message = (e as Error).message;
-      // Face checks run only in the Android app; the web app never claims a face match, so it cannot skip the check.
-      setError(/face/i.test(message) ? 'This class needs the face check, which runs in the FocusLock Android app. Check in with the app, or tap “Can’t scan? Ask teacher” to have your teacher confirm you.' : message);
+      const result = await flow.run(qr);
+      if (result.ok) {
+        setNotice(result.duplicate ? 'You were already checked in.' : 'Checked in. Your attendance is recorded as present.');
+        await refresh();
+      } else { setNotice(''); setError(result.message); if (result.review) setStep('review'); }
     } finally { setBusy(false); }
   }
   async function requestReview(event: React.FormEvent) {
@@ -185,7 +229,7 @@ function SessionView({ auth, sessionId, onBack, onExpired }: { auth: Auth; sessi
       </form>}
     </div>
 
-    {focusEligible && session.state !== 'ready' && <FocusPanel auth={auth} session={session}/>}
+    {focusEligible && session.state !== 'ready' && <FocusPanel auth={auth} session={session} checkInFlow={flow.run}/>}
 
     <div className="card">
       <h3>Course resources</h3>
@@ -205,10 +249,11 @@ function SessionView({ auth, sessionId, onBack, onExpired }: { auth: Auth; sessi
       <div className="actions"><button onClick={() => setStep('scan')}>Accept and scan</button><button className="secondary" onClick={() => setStep('review')}>Decline · ask teacher instead</button></div>
     </div></div>}
     {step === 'scan' && <QrScanner title="Scan your class QR" onResult={qr => void scanned(qr)} onCancel={() => setStep('idle')}/>}
+    {flow.modal}
   </section>;
 }
 
-function FocusPanel({ auth, session }: { auth: Auth; session: ClassSession }) {
+function FocusPanel({ auth, session, checkInFlow }: { auth: Auth; session: ClassSession; checkInFlow: (qr: string) => Promise<CheckResult> }) {
   const token = auth.access_token;
   const key = `focuslock-focus-${auth.user.id}-${session.id}-${session.starts_at}`;
   const saved = (() => { try { return JSON.parse(sessionStorage.getItem(key) ?? 'null') as { state: FocusState; policy: { token: string; exp: number } | null } | null; } catch { return null; } })();
@@ -285,7 +330,11 @@ function FocusPanel({ auth, session }: { auth: Auth; session: ClassSession }) {
   }
   async function rejoin(qr: string) {
     setScanning(false); setBusy(true); setError('');
-    try { await checkIn(auth.user.id, token, qr); setState('active'); await send('started'); }
+    try {
+      const result = await checkInFlow(qr); // includes the face check when one is recorded
+      if (!result.ok) { setError(result.message); return; }
+      setState('active'); await send('started');
+    }
     catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
 

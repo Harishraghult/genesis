@@ -8,7 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 data class Student(val id: Int, val name: String, val role: String = "student")
-data class FaceStatus(val mode: String, val enrolled: Boolean, val template: FloatArray?)
+data class FaceStatus(val mode: String, val enrolled: Boolean)
 data class FaceRosterEntry(val id: Int, val name: String, val email: String, val enrolled: Boolean)
 data class ClassSession(val id: Int, val title: String, val course: String, val startsAt: String, val endsAt: String, val status: String?, val state: String, val pendingReview: Boolean)
 data class HistoryEntry(val session: ClassSession, val status: String, val updatedAt: String)
@@ -96,10 +96,11 @@ class Api {
     suspend fun registerDevice(challenge: ServerChallenge, publicKey: String, signature: String, integrityToken: String?): String =
         JSONObject(request("/devices/register", "POST", JSONObject().put("challenge_id", challenge.id)
             .put("public_key", publicKey).put("signature", signature).apply { if (integrityToken != null) put("integrity_token", integrityToken) })).getString("device_id")
-    suspend fun checkInChallenge(deviceId: String, qr: String, faceVerified: Boolean = false): ServerChallenge = parseChallenge(JSONObject(request("/check-ins/challenge", "POST", JSONObject().put("device_id", deviceId).put("qr", qr).put("focus_disclosure", "accepted").put("face_verified", faceVerified))))
-    suspend fun checkIn(deviceId: String, qr: String, challengeId: String, signature: String, integrityToken: String?, faceVerified: Boolean = false): CheckInResult {
+    suspend fun checkInChallenge(deviceId: String, qr: String, faceVerified: Boolean = false, faceToken: String? = null): ServerChallenge = parseChallenge(JSONObject(request("/check-ins/challenge", "POST", JSONObject().put("device_id", deviceId).put("qr", qr).put("focus_disclosure", "accepted").put("face_verified", faceVerified).apply { if (faceToken != null) put("face_token", faceToken) })))
+    suspend fun checkIn(deviceId: String, qr: String, challengeId: String, signature: String, integrityToken: String?, faceVerified: Boolean = false, faceToken: String? = null): CheckInResult {
         val response = JSONObject(request("/check-ins", "POST", JSONObject().put("device_id", deviceId).put("qr", qr)
-            .put("challenge_id", challengeId).put("signature", signature).put("focus_disclosure", "accepted").put("face_verified", faceVerified).apply { if (integrityToken != null) put("integrity_token", integrityToken) }))
+            .put("challenge_id", challengeId).put("signature", signature).put("focus_disclosure", "accepted").put("face_verified", faceVerified)
+            .apply { if (integrityToken != null) put("integrity_token", integrityToken); if (faceToken != null) put("face_token", faceToken) }))
         return CheckInResult(response.getString("status"), response.getString("method"), response.getBoolean("duplicate"))
     }
     suspend fun requestReview(sessionId: Int, reason: String): String =
@@ -125,9 +126,12 @@ class Api {
     suspend fun focusResumeStatus(sessionId: Int): String =
         JSONObject(request("/sessions/$sessionId/focus-resume-requests/mine")).getString("status")
     suspend fun faceStatus(): FaceStatus = JSONObject(request("/face/templates/me")).let { json ->
-        val template = json.optJSONArray("template")?.let { array -> FloatArray(array.length()) { array.getDouble(it).toFloat() } }
-        FaceStatus(json.getString("mode"), json.getBoolean("enrolled"), template)
+        FaceStatus(json.getString("mode"), json.getBoolean("enrolled"))
     }
+    /** Sends the live 128-number template; the server compares it with the stored one and returns a short face pass on a match. */
+    suspend fun faceVerify(template: FloatArray): String? =
+        JSONObject(request("/face/verify", "POST", JSONObject().put("template", JSONArray(template.map { it.toDouble() })).put("model", FaceEngine.MODEL_ID)))
+            .let { if (it.getBoolean("match")) it.getString("face_token") else null }
     suspend fun faceRoster(): List<FaceRosterEntry> = JSONArray(request("/face/roster")).mapObjects {
         FaceRosterEntry(it.getInt("id"), it.getString("name"), it.getString("email"), it.getBoolean("enrolled"))
     }

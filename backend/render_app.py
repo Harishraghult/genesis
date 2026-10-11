@@ -1,10 +1,15 @@
 """Single-service hosting (Render): the built dashboard at / and the API at the same-origin /api path."""
+import mimetypes
 import os
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from app.main import app as focuslock_api
+
+# The face check loads a JavaScript module (.mjs) and WebAssembly; with nosniff they need exact types.
+for _type, _ext in (("text/javascript", ".mjs"), ("application/wasm", ".wasm"), ("application/manifest+json", ".webmanifest")):
+    mimetypes.add_type(_type, _ext)
 
 STATIC = Path(os.environ.get("DASHBOARD_DIST", Path(__file__).parent / "static")).resolve()
 
@@ -16,7 +21,7 @@ SECURITY_HEADERS = {
     "Permissions-Policy": "camera=(self), microphone=(), geolocation=(), bluetooth=(), usb=(), payment=(), interest-cohort=()",
     "Cross-Origin-Opener-Policy": "same-origin",
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
-    "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; "
+    "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; img-src 'self' data:; "
                                "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
 }
 

@@ -7,10 +7,15 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
     "check": "tsc --noEmit",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "models": "node scripts/copy-face-models.mjs",
+    "predev": "node scripts/copy-face-models.mjs",
+    "prebuild": "node scripts/copy-face-models.mjs"
   },
   "dependencies": {
+    "@vladmandic/face-api": "1.7.15",
     "jsqr": "1.4.0",
+    "onnxruntime-web": "1.22.0",
     "qrcode": "1.5.4",
     "react": "19.1.0",
     "react-dom": "19.1.0"

@@ -41,6 +41,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,8 +67,10 @@ fun CameraFrame(modifier: Modifier = Modifier, aspect: Float = 3f / 4f, guide: B
 
 /** Shown right after the first QR scan when staff recorded this student's face. The camera image never leaves the phone. */
 @Composable
-fun FaceVerifyScreen(template: FloatArray?, onMatched: () -> Unit, onGiveUp: (String) -> Unit, onCancel: () -> Unit) {
+fun FaceVerifyScreen(verify: suspend (FloatArray) -> String?, onMatched: (String) -> Unit, onGiveUp: (String) -> Unit, onCancel: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var checking by remember { mutableStateOf(false) }
     var granted by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
     var attempt by remember { mutableStateOf(0) }
@@ -74,7 +78,6 @@ fun FaceVerifyScreen(template: FloatArray?, onMatched: () -> Unit, onGiveUp: (St
     var status by remember { mutableStateOf("Look at the camera") }
     var notice by remember { mutableStateOf<String?>(null) }
     BackHandler { onCancel() }
-    LaunchedEffect(template) { if (template == null) onGiveUp("The face check is unavailable, so I need the teacher to review my attendance") }
     fun failed(message: String) {
         failures += 1
         if (failures >= MAX_FAILURES) onGiveUp("The face check did not succeed after three tries, so I need teacher review")
@@ -82,18 +85,26 @@ fun FaceVerifyScreen(template: FloatArray?, onMatched: () -> Unit, onGiveUp: (St
     }
     Column(Modifier.fillMaxSize().padding(vertical = 8.dp).glass().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Confirm it is you", style = MaterialTheme.typography.headlineMedium)
-        Text("Your phone compares your face with the record your college made. The camera picture stays on this phone: it is not saved or sent. The match is evidence for your teacher, not proof.")
-        if (template != null) {
-            if (!granted) Button(onClick = { launcher.launch(Manifest.permission.CAMERA) }) { Text("Allow camera for the face check") }
-            else key(attempt) {
-                CameraFrame {
-                    FaceCapture(requireBlink = true, frames = 3,
-                        onEmbedding = { live -> if (FaceMath.matches(live, template)) onMatched() else failed("That did not match.") },
-                        onStatus = { status = it }, onError = { failed(it) },
-                        modifier = Modifier.fillMaxSize())
-                }
-                Text(status, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleMedium)
+        Text("Your phone turns the camera picture into 128 numbers and FocusLock compares them with the record your college made. The picture itself is not saved or sent. The match is evidence for your teacher, not proof.")
+        if (!granted) Button(onClick = { launcher.launch(Manifest.permission.CAMERA) }) { Text("Allow camera for the face check") }
+        else key(attempt) {
+            CameraFrame {
+                FaceCapture(requireBlink = true, frames = 3,
+                    onEmbedding = { live ->
+                        if (!checking) {
+                            checking = true; status = "Checking with FocusLock…"
+                            scope.launch {
+                                val token = runCatching { verify(live) }
+                                checking = false
+                                token.onSuccess { if (it != null) onMatched(it) else failed("That did not match.") }
+                                    .onFailure { failed("FocusLock could not be reached.") }
+                            }
+                        }
+                    },
+                    onStatus = { if (!checking) status = it }, onError = { failed(it) },
+                    modifier = Modifier.fillMaxSize())
             }
+            Text(status, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleMedium)
         }
         notice?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         OutlinedButton(onClick = { onGiveUp("I chose teacher review instead of the face check") }) { Text("Ask my teacher to review instead") }

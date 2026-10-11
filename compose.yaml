@@ -43,7 +43,6 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
       FACE_TEMPLATE_KEY: ${FACE_TEMPLATE_KEY:-}
       FACE_CHECK_MODE: ${FACE_CHECK_MODE:-off}
-      FACE_TEMPLATE_DOWNLOAD: ${FACE_TEMPLATE_DOWNLOAD:-false}
     ports:
       - '127.0.0.1:8000:8000'
     depends_on:

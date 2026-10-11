@@ -78,14 +78,15 @@ export async function ensureDevice(studentId: number, token: string, forceNew = 
   return { deviceId: result.device_id, keys: stored.keys };
 }
 
-/** Signed QR check-in. The focus disclosure must already have been accepted by the student. */
-export async function checkIn(studentId: number, token: string, qr: string): Promise<{ status: string; duplicate: boolean; session_id: number }> {
+/** Signed QR check-in. The focus disclosure must already have been accepted; faceToken is the server's face pass, if any. */
+export async function checkIn(studentId: number, token: string, qr: string, faceToken?: string): Promise<{ status: string; duplicate: boolean; session_id: number }> {
+  const face = faceToken ? { face_verified: true, face_token: faceToken } : {};
   const attempt = async (forceNew: boolean) => {
     const { deviceId, keys } = await ensureDevice(studentId, token, forceNew);
-    const challenge = await api<Challenge>('/check-ins/challenge', token, { method: 'POST', body: JSON.stringify({ device_id: deviceId, qr, focus_disclosure: 'accepted' }) });
-    const payload = `FL2|checkin|${studentId}|${deviceId}|${challenge.challenge_id}|${challenge.nonce}|${await sha256Hex(qr)}|focus-disclosure-v1|accepted`;
+    const challenge = await api<Challenge>('/check-ins/challenge', token, { method: 'POST', body: JSON.stringify({ device_id: deviceId, qr, focus_disclosure: 'accepted', ...face }) });
+    const payload = `FL2|checkin|${studentId}|${deviceId}|${challenge.challenge_id}|${challenge.nonce}|${await sha256Hex(qr)}|focus-disclosure-v1|accepted${faceToken ? '|face-match-v1' : ''}`;
     const signature = await sign(keys, payload);
-    return api<{ status: string; duplicate: boolean; session_id: number }>('/check-ins', token, { method: 'POST', body: JSON.stringify({ device_id: deviceId, qr, challenge_id: challenge.challenge_id, signature, focus_disclosure: 'accepted' }) });
+    return api<{ status: string; duplicate: boolean; session_id: number }>('/check-ins', token, { method: 'POST', body: JSON.stringify({ device_id: deviceId, qr, challenge_id: challenge.challenge_id, signature, focus_disclosure: 'accepted', ...face }) });
   };
   try {
     return await attempt(false);

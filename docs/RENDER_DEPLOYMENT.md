@@ -15,7 +15,7 @@ Phone app: `cd android; .\gradlew.bat :app:installDebug -PAPI_BASE_URL=https://<
 
 ## Face check after the QR (anti-proxy)
 
-The Blueprint sets `FACE_CHECK_MODE=enrolled` and generates `FACE_TEMPLATE_KEY`. Teachers record each student's face once in the Android app (teacher account → Record faces); after that, a student's QR check-in also needs an on-device face match (blink + match) in the Android app, and a failed or skipped check goes to teacher review. The web app cannot run the face check, so enrolled students check in with the app or ask the teacher. Only an encrypted 128-number face template is stored (AES-GCM), never a photo. Switch to `required` once every student's face is recorded, so unrecorded accounts cannot be used as proxies.
+The Blueprint sets `FACE_CHECK_MODE=enrolled` and generates `FACE_TEMPLATE_KEY`. An administrator records each student's face once at `/admin` (sign in as `admin@focuslock.test`), or a teacher in the Android app. After that, a student's QR check-in on the web or in the app also needs a face check (blink, then a server-side match); a failed or skipped check goes to teacher review. Only an encrypted 128-number face template is stored (AES-GCM), never a photo. Switch to `required` once every student's face is recorded, so unrecorded accounts cannot be used as proxies.
 
 **Recorded faces need a real database.** In `MOCK_DATA` mode they disappear whenever the service restarts or wakes from sleep. Add your Neon connection string as `DATABASE_URL` in the Render dashboard (Environment); on the next start the container migrates the schema and seeds the demo accounts once, and `MOCK_DATA` is ignored.
 

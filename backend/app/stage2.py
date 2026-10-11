@@ -31,6 +31,7 @@ class ChallengeRequest(Strict):
     qr: str = Field(max_length=1024)
     focus_disclosure: Literal["accepted"]
     face_verified: bool = False
+    face_token: str | None = Field(default=None, max_length=200)
 
 
 class CheckIn(ChallengeRequest):
@@ -186,7 +187,7 @@ def checkin_challenge(body: ChallengeRequest, user: User = Depends(current_user)
     rate_limit(db, "checkin-challenge", str(user.id), 20)
     device_for(db, user, body.device_id)
     from .face import require_face
-    require_face(db, user, body.face_verified)
+    require_face(db, user, body.face_verified, body.face_token)
     now = now_utc()
     payload = verify_qr(body.qr, now)
     session = enrolled_session(db, user, payload["sid"])
@@ -210,7 +211,7 @@ def checkin(body: CheckIn, user: User = Depends(current_user), db: Session = Dep
     if challenge is None or challenge.purpose != "checkin" or challenge.student_id != user.id or challenge.device_id != device.id or challenge.qr_digest != hashlib.sha256(qr_bytes).hexdigest():
         raise HTTPException(409, "Check-in challenge does not match")
     from .face import require_face
-    require_face(db, user, body.face_verified)
+    require_face(db, user, body.face_verified, body.face_token)
     canonical = checkin_payload(user.id, device.id, challenge.id, challenge.nonce, body.qr, body.face_verified)
     key, _ = public_key(device.public_key)
     verify_device_signature(key, canonical, body.signature)

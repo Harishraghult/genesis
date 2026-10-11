@@ -2,11 +2,13 @@
 
 ## How the face check works
 
-1. **Staff record a face in person.** A teacher or administrator signs in to the Android app with their own account, which opens **Record student faces**. The student looks at the phone and blinks once. Staff must tick that the student agrees. The phone turns the live camera frames into a 128-number template; no photo is uploaded or stored.
-2. **The server stores only the template**, encrypted with AES-256-GCM (`FACE_TEMPLATE_KEY`) and bound to the student ID. Recording and deleting a template writes an `admin_audit` entry. Teachers can only record students in their own courses; administrators can record anyone.
-3. **After the student's first QR scan** (and the focus disclosure) the phone downloads that student's own template, asks for a blink, and compares the live face with it **on the phone**. A match lets the check-in continue. The live camera image is never saved or sent.
+1. **Staff record a face in person.** An administrator opens **`/admin`** on the website (or a teacher/administrator uses **Record student faces** in the Android app). Staff tick that the student agrees, the student looks at the camera and blinks once, and the device turns several frames into one 128-number template (SFace model, the same file on web and Android). Photos are never saved or uploaded.
+2. **The server stores only the template**, encrypted with AES-256-GCM (`FACE_TEMPLATE_KEY`) and bound to the student ID. Recording and deleting a template writes an `admin_audit` entry. Teachers can only record students in their own courses; administrators can record any student.
+3. **After the student's QR scan** (and the focus disclosure) the phone or browser asks for a blink, turns the live face into 128 numbers and sends them to `POST /face/verify`. **The server compares them with the stored template** (cosine ≥ 0.42) and, on a match, returns a signed face pass valid for 2 minutes. The stored template never leaves the server.
 4. **If it fails three times, the camera is unavailable, or the student prefers it,** the app sends a teacher review request instead. Nobody is marked absent automatically.
-5. The signed check-in includes a `face-match-v1` claim. The server refuses a QR check-in from a student with a recorded face unless the claim is present, and the device signature covers the claim.
+5. The signed check-in includes a `face-match-v1` claim **and** the server's face pass. The server refuses a QR check-in from a student with a recorded face without a valid pass for that student; the device signature covers the claim.
+
+Blink detection uses two signals (the landmark eye-openness ratio and the contrast of the eye region), so a still photo held to the camera does not pass. A video of the student, or a modified client, still could: the live template is computed on the device, so the match is evidence, not proof.
 
 `FACE_CHECK_MODE`: `off` (default), `enrolled` (only students with a recorded face), or `required` (students without a record go to teacher review).
 

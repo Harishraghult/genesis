@@ -1,9 +1,15 @@
-"""Staff-recorded face templates. Photos are never uploaded or stored; matching happens on the student's phone."""
+"""Staff-recorded face templates. Photos are never uploaded or stored; only an encrypted 128-number template is kept.
+
+The Android app can match on the phone; the web app sends a live template and the server compares it, so the
+stored template never leaves the server for web check-ins.
+"""
 import base64
 import hashlib
+import hmac
 import math
 import os
 import struct
+import time
 from typing import Literal
 
 from cryptography.exceptions import InvalidTag
@@ -22,6 +28,8 @@ from .stage2 import now_utc, student_only
 router = APIRouter()
 MODEL = "sface-2021dec"
 DIMENSIONS = 128
+MATCH_THRESHOLD = 0.42  # same cosine threshold as the Android app (FaceMath.MATCH_THRESHOLD)
+PASS_SECONDS = 120
 
 
 class Strict(BaseModel):
@@ -72,8 +80,29 @@ def valid_template(values: list[float]) -> list[float]:
     return values
 
 
-def require_face(db: Session, user: User, face_verified: bool) -> None:
-    """Called before QR check-in. The claim is made by the phone: it is evidence, not proof."""
+def _pass_key() -> bytes:
+    return hashlib.sha256(b"focuslock-face-pass-v1|" + settings().face_template_key.encode()).digest()
+
+
+def issue_pass(student_id: int) -> str:
+    """Short-lived signed proof that the server matched this student's live face template."""
+    expires = int(time.time()) + PASS_SECONDS
+    body = f"{student_id}.{expires}"
+    return "FV1." + body + "." + hmac.new(_pass_key(), body.encode(), hashlib.sha256).hexdigest()
+
+
+def pass_valid(token: str | None, student_id: int) -> bool:
+    try:
+        prefix, sid, expires, signature = (token or "").split(".")
+        expected = hmac.new(_pass_key(), f"{sid}.{expires}".encode(), hashlib.sha256).hexdigest()
+        return (prefix == "FV1" and hmac.compare_digest(signature, expected) and int(sid) == student_id
+                and int(time.time()) < int(expires))
+    except (ValueError, HTTPException):
+        return False
+
+
+def require_face(db: Session, user: User, face_verified: bool, face_token: str | None = None) -> None:
+    """Called before QR check-in. A server face pass (web) or the phone's own match claim (Android) is evidence, not proof."""
     current = mode()
     if current == "off":
         return
@@ -82,7 +111,10 @@ def require_face(db: Session, user: User, face_verified: bool) -> None:
         if current == "required":
             raise HTTPException(409, "Face enrollment is required. Ask your teacher to confirm attendance.")
         return
-    if not face_verified:
+    if face_verified and face_token is not None and not pass_valid(face_token, user.id):
+        raise HTTPException(409, "Face check expired. Look at the camera again.")
+    if not (face_verified and pass_valid(face_token, user.id)):
+        # The server itself must have matched the face (POST /face/verify); a bare client claim is not enough.
         raise HTTPException(409, "Face verification is required before check-in")
 
 
@@ -108,10 +140,29 @@ def student_for(db: Session, staff_user: User, student_id: int) -> User:
     return student
 
 
-def template_download_allowed() -> bool:
-    """Production APIs never return decrypted templates unless explicitly configured (FACE_TEMPLATE_DOWNLOAD=true)."""
-    cfg = settings()
-    return cfg.app_env == "development" or cfg.face_template_download
+class VerifyInput(Strict):
+    template: list[float] = Field(min_length=DIMENSIONS, max_length=DIMENSIONS)
+    model: Literal["sface-2021dec"]
+
+
+@router.post("/face/verify")
+def verify(body: VerifyInput, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Compares a live template with the stored one on the server; returns a 2-minute face pass on a match."""
+    student_only(user)
+    from .stage6 import rate_limit
+    rate_limit(db, "face-verify", str(user.id), 12)
+    db.commit()
+    if mode() == "off":
+        raise HTTPException(409, "Face checks are turned off")
+    row = db.get(FaceTemplate, user.id)
+    if row is None:
+        raise HTTPException(404, "No face is recorded for you. Ask your teacher or administrator.")
+    live = valid_template(body.template)
+    stored = unseal(user.id, row.ciphertext)
+    score = sum(a * b for a, b in zip(live, stored)) / (math.sqrt(sum(a * a for a in live)) * math.sqrt(sum(b * b for b in stored)))
+    if score < MATCH_THRESHOLD:
+        return {"match": False}
+    return {"match": True, "face_token": issue_pass(user.id), "expires_in": PASS_SECONDS}
 
 
 @router.get("/face/templates/me")
@@ -119,10 +170,8 @@ def my_template(user: User = Depends(current_user), db: Session = Depends(get_db
     student_only(user)
     current = mode()
     row = db.get(FaceTemplate, user.id) if current != "off" else None
-    release = row is not None and template_download_allowed()
-    # Without the template the app cannot run the on-device check and sends the student to teacher review.
-    return {"mode": current, "enrolled": row is not None, "model": row.model if row else None,
-            "template_download": release, "template": unseal(user.id, row.ciphertext) if release else None}
+    # The stored template never leaves the server: matching happens in POST /face/verify.
+    return {"mode": current, "enrolled": row is not None, "model": row.model if row else None}
 
 
 @router.get("/face/roster")

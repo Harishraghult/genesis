@@ -299,8 +299,8 @@ fun FocusLock(callbackUri: Uri? = null, clearCallback: () -> Unit = {}, model: F
                 }
                 composable("face-check/{id}", arguments = listOf(navArgument("id") { type = NavType.IntType })) { backStack ->
                     val id = backStack.arguments!!.getInt("id")
-                    FaceVerifyScreen(template = model.faceTemplate(),
-                        onMatched = { nav.popBackStack(); model.faceMatched(id) },
+                    FaceVerifyScreen(verify = model::verifyFace,
+                        onMatched = { token -> nav.popBackStack(); model.faceMatched(id, token) },
                         onGiveUp = { reason -> nav.popBackStack(); model.faceGaveUp(id, reason) },
                         onCancel = { nav.popBackStack(); model.faceCancelled() })
                 }

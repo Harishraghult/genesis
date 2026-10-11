@@ -4,8 +4,9 @@ import QRCode from 'qrcode';
 import './styles.css';
 import { api, date, stateLabel, url64 } from './api';
 import { StudentApp } from './student';
+import { AdminApp } from './admin';
 
-type User = { id: number; name: string; email: string; role: 'student' | 'teacher' };
+type User = { id: number; name: string; email: string; role: 'student' | 'teacher' | 'admin' };
 type Course = { id: number; code: string; title: string; term: string };
 type Session = { id: number; course_id: number; title: string; room_code: string; starts_at: string; ends_at: string; state: 'ready' | 'checkin_pending' | 'active' | 'paused' | 'ended' };
 type Resource = { id: number; session_id: number; title: string; url: string; kind: 'pdf' | 'text'; downloadable: boolean };
@@ -86,7 +87,7 @@ function App() {
       const result = await api<Auth>('/auth/dev-login', undefined, { method: 'POST', body: JSON.stringify({ email, password }) });
       if (result.user.role !== 'teacher') {
         await api('/auth/logout', result.access_token, { method: 'POST' });
-        throw new Error('This is the teacher sign-in. Students sign in at /student or use the Android app.');
+        throw new Error(result.user.role === 'admin' ? 'Administrators sign in at /admin.' : 'This is the teacher sign-in. Students sign in at /student or use the Android app.');
       }
       setPassword(''); setAuth(result);
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
@@ -99,7 +100,7 @@ function App() {
   return <><header><div className="brand-row"><img className="brand-logo" src="/logo-64.png" alt="" width="40" height="40"/><div className="brand">FocusLock<span>TEACHER WORKSPACE</span></div></div>{auth && <div className="account">{auth.user.name}<button className="secondary" onClick={signOut}>Sign out</button></div>}</header>
     {enabled && <div className="dev-banner">DEMO · Sample accounts and courses. Do not enter real student data.</div>}
     {!auth ? <main className="login"><div><p className="eyebrow">A calmer start to class</p><h1>Attendance with<br/>student choice.</h1><p>Manage your classes and confirm attendance. Students keep control of their personal phones.</p><p className="note">No Bluetooth, VPN or device permissions needed for attendance.</p></div>
-      <div className="panel"><h2>Teacher sign-in</h2>{enabled ? <form onSubmit={signIn}><p>Development accounts only</p><label>Email<input type="email" autoComplete="username" required value={email} onChange={e => setEmail(e.target.value)}/></label><label>Demo password<input type="password" autoComplete="current-password" required value={password} onChange={e => setPassword(e.target.value)}/></label><p className="hint">Use the demo password (DEV_PASSWORD). Students: <a href="/student">open the student app</a>.</p><button disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button></form> : <><p>Use your college account.</p><button disabled={!college?.college_oidc || !college.authorization_endpoint || busy} onClick={() => void collegeSignIn()}>Sign in with college</button>{!college?.college_oidc && <p role="status">College authentication needs administrator configuration.</p>}</>}{error && <p className="error" role="alert">{error}</p>}</div></main>
+      <div className="panel"><h2>Teacher sign-in</h2>{enabled ? <form onSubmit={signIn}><p>Development accounts only</p><label>Email<input type="email" autoComplete="username" required value={email} onChange={e => setEmail(e.target.value)}/></label><label>Demo password<input type="password" autoComplete="current-password" required value={password} onChange={e => setPassword(e.target.value)}/></label><p className="hint">Use the demo password (DEV_PASSWORD). Students: <a href="/student">open the student app</a>. Administrators: <a href="/admin">face records</a>.</p><button disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button></form> : <><p>Use your college account.</p><button disabled={!college?.college_oidc || !college.authorization_endpoint || busy} onClick={() => void collegeSignIn()}>Sign in with college</button>{!college?.college_oidc && <p role="status">College authentication needs administrator configuration.</p>}</>}{error && <p className="error" role="alert">{error}</p>}</div></main>
       : <Dashboard auth={auth}/>}
     <footer>A QR check-in is evidence of participation, not proof of physical presence. Teacher confirmation remains available when scanning fails or focus is declined.</footer></>;
 }
@@ -428,6 +429,7 @@ function Dashboard({ auth }: { auth: Auth }) {
   </main>;
 }
 
-const isStudent = window.location.pathname === '/student' || window.location.pathname.startsWith('/student/');
-document.title = isStudent ? 'FocusLock · Student' : 'FocusLock · Teacher workspace';
-createRoot(document.getElementById('root')!).render(<React.StrictMode>{isStudent ? <StudentApp/> : <App/>}</React.StrictMode>);
+const area = (prefix: string) => window.location.pathname === prefix || window.location.pathname.startsWith(prefix + '/');
+const isStudent = area('/student'), isAdmin = area('/admin');
+document.title = isStudent ? 'FocusLock · Student' : isAdmin ? 'FocusLock · Admin' : 'FocusLock · Teacher workspace';
+createRoot(document.getElementById('root')!).render(<React.StrictMode>{isStudent ? <StudentApp/> : isAdmin ? <AdminApp/> : <App/>}</React.StrictMode>);

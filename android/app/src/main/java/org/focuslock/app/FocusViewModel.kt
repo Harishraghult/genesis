@@ -53,6 +53,7 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         resumeLock = focus.localStudentId()?.let { lockFor(it, focus.localSession()) } ?: "none"))
     private var faceStatus: FaceStatus? = null
     private val faceVerifiedAt = HashMap<String, Long>()
+    private val facePasses = HashMap<String, String>()
     val state = mutable.asStateFlow()
     private var job: Job? = null
 
@@ -109,18 +110,19 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         when {
             status.mode == "off" || (!status.enrolled && status.mode != "required") -> checkInInternal(id, qr, false)
             !status.enrolled -> requestReviewInternal(id, "No face record exists for me yet, so I need the teacher to review my attendance")
-            faceFresh(studentId, id) -> checkInInternal(id, qr, true)
+            faceFresh(studentId, id) -> checkInInternal(id, qr, true, facePasses[faceKey(studentId, id)])
             else -> mutable.value = mutable.value.copy(faceQr = FaceQr(id, qr), faceMessage = null)
         }
     }
-    fun faceTemplate(): FloatArray? = faceStatus?.template
-    fun faceMatched(id: Int) {
+    suspend fun verifyFace(live: FloatArray): String? = api.faceVerify(live)
+    fun faceMatched(id: Int, token: String) {
         val studentId = mutable.value.student?.id ?: return
         val waiting = mutable.value.faceQr ?: return
         faceVerifiedAt[faceKey(studentId, id)] = SystemClock.elapsedRealtime()
+        facePasses[faceKey(studentId, id)] = token
         mutable.value = mutable.value.copy(faceQr = null)
         run {
-            try { checkInInternal(id, waiting.qr, true) }
+            try { checkInInternal(id, waiting.qr, true, token) }
             catch (expired: ApiException) {
                 // The class QR rotates every 20 s; a slow face check can outlive it. The match stays valid for 2 minutes.
                 if (expired.statusCode != 410) throw expired
@@ -271,14 +273,14 @@ class FocusViewModel(application: Application) : AndroidViewModel(application) {
         pendingPrefs.edit().putStringSet("student-$studentId", changed.map(Int::toString).toSet()).apply()
         mutable.value = mutable.value.copy(pendingLocal = changed)
     }
-    private suspend fun checkInInternal(id: Int, qr: String, face: Boolean) {
+    private suspend fun checkInInternal(id: Int, qr: String, face: Boolean, faceToken: String? = null) {
         val studentId = mutable.value.student?.id ?: error("Sign in required")
         mutable.value = mutable.value.copy(checkInResult = null)
         try {
             val deviceId = identity.ensureRegistered(api, studentId)
-            val challenge = api.checkInChallenge(deviceId, qr, face)
+            val challenge = api.checkInChallenge(deviceId, qr, face, faceToken)
             val signature = identity.signCheckIn(studentId, deviceId, challenge, qr, face)
-            val result = api.checkIn(deviceId, qr, challenge.id, signature, null, face)
+            val result = api.checkIn(deviceId, qr, challenge.id, signature, null, face, faceToken)
             autoFocusPrefs.edit().putBoolean("student-$studentId-session-$id", true).apply()
             savePending(id, false)
             val detail = api.session(id)
