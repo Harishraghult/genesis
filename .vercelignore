@@ -6,3 +6,10 @@ docs/*.png
 frontend-faculty/
 frontend-student/
 app-debug.zip
+.git/
+.env
+.env.local
+.vercel/
+**/node_modules/
+dashboard/dist/
+*.db
