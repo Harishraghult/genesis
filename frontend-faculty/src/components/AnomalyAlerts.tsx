@@ -29,61 +29,61 @@ export default function AnomalyAlerts({ alerts, onDismiss }: AnomalyAlertsProps)
         const isTamper = alert.type === "TAMPER_DETECTED";
 
         const badgeColor = isTamper
-          ? "text-red-300 bg-red-950/80 border-red-700"
+          ? "text-red-800 bg-red-50 border-red-200"
           : isAppSwitch
-          ? "text-amber-300 bg-amber-950/80 border-amber-700"
-          : "text-rose-300 bg-rose-950/80 border-rose-700";
+          ? "text-amber-800 bg-amber-50 border-amber-200"
+          : "text-rose-800 bg-rose-50 border-rose-200";
 
         const borderColor = isTamper
-          ? "border-red-500 shadow-red-500/30"
+          ? "border-red-400 shadow-red-100"
           : isAppSwitch
-          ? "border-amber-500 shadow-amber-500/30"
-          : "border-rose-500 shadow-rose-500/30";
+          ? "border-amber-400 shadow-amber-100"
+          : "border-rose-400 shadow-rose-100";
 
         return (
           <div
             key={alert.id}
-            className={`pointer-events-auto bg-slate-950/95 border-2 ${borderColor} rounded-xl p-4 shadow-2xl text-slate-100 backdrop-blur-md animate-slide-up flex items-start justify-between gap-3`}
+            className={`pointer-events-auto bg-white/95 border-2 ${borderColor} rounded-2xl p-4 shadow-xl text-[#1E293B] backdrop-blur-md animate-slide-up flex items-start justify-between gap-3`}
           >
             <div className="flex items-start gap-3">
               <div
-                className={`p-2 rounded-lg shrink-0 mt-0.5 ${
+                className={`p-2 rounded-xl shrink-0 mt-0.5 ${
                   isTamper
-                    ? "bg-red-900/60 text-red-400"
+                    ? "bg-red-50 text-red-600"
                     : isAppSwitch
-                    ? "bg-amber-900/60 text-amber-400"
-                    : "bg-rose-900/60 text-rose-400"
+                    ? "bg-amber-50 text-amber-600"
+                    : "bg-rose-50 text-rose-600"
                 }`}
               >
                 {isTamper ? (
-                  <Shield className="w-5 h-5 animate-pulse text-red-400" />
+                  <Shield className="w-5 h-5 animate-pulse text-red-600" />
                 ) : isAppSwitch ? (
-                  <Smartphone className="w-5 h-5 animate-bounce text-amber-400" />
+                  <Smartphone className="w-5 h-5 animate-bounce text-amber-600" />
                 ) : (
-                  <AlertOctagon className="w-5 h-5 animate-bounce text-rose-400" />
+                  <AlertOctagon className="w-5 h-5 animate-bounce text-rose-600" />
                 )}
               </div>
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span
-                    className={`text-[11px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded border ${badgeColor} flex items-center gap-1`}
+                    className={`text-[11px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md border ${badgeColor} flex items-center gap-1`}
                   >
                     <Volume2 className="w-3 h-3 animate-pulse" />
                     {alert.title || (isAppSwitch ? "App Switch Violation" : isTamper ? "Security Tamper Attempt" : "Network Verification Needed")}
                   </span>
-                  <span className="text-[10px] text-slate-400 font-mono">
+                  <span className="text-[10px] text-[#64748B] font-mono">
                     {new Date(alert.timestamp).toLocaleTimeString()}
                   </span>
                   {alert.leave_count && alert.leave_count > 1 ? (
-                    <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-rose-900 text-rose-200 border border-rose-700">
+                    <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-rose-100 text-rose-800 border border-rose-200">
                       Violation #{alert.leave_count}
                     </span>
                   ) : null}
                 </div>
-                <p className="text-sm font-bold text-white mt-1">
-                  {alert.student_name} <span className="font-mono text-cyan-300 text-xs">({alert.student_id})</span>
+                <p className="text-sm font-bold text-[#1E293B] mt-1">
+                  {alert.student_name} <span className="font-mono text-[#2E6B38] text-xs font-semibold">({alert.student_id})</span>
                 </p>
-                <p className="text-xs text-slate-300 mt-1 font-mono leading-relaxed bg-slate-900/90 p-2 rounded border border-slate-800">
+                <p className="text-xs text-[#475569] mt-1 font-mono leading-relaxed bg-[#FAF9F5] p-2 rounded-lg border border-[#E5E3DC]">
                   {alert.message}
                 </p>
               </div>
@@ -91,7 +91,7 @@ export default function AnomalyAlerts({ alerts, onDismiss }: AnomalyAlertsProps)
 
             <button
               onClick={() => onDismiss(alert.id)}
-              className="text-slate-400 hover:text-white p-1 rounded-md transition-colors shrink-0"
+              className="text-[#94A3B8] hover:text-[#1E293B] p-1 rounded-md transition-colors shrink-0"
               title="Dismiss alert"
             >
               <X className="w-4 h-4" />

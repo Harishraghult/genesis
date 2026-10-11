@@ -282,14 +282,14 @@ export default function FocusAttestation({
   // Duplicate tab: block this copy entirely
   if (duplicateTab) {
     return (
-      <div className="fixed inset-0 z-[100] bg-slate-950 flex items-center justify-center p-6 text-center">
-        <div className="max-w-sm bg-rose-950/90 border border-rose-600 rounded-2xl p-6 shadow-2xl">
-          <Copy className="w-12 h-12 text-rose-400 mx-auto mb-3 animate-pulse" />
-          <h2 className="text-lg font-bold text-white">Parallel Tabs Restricted</h2>
-          <p className="text-xs text-rose-200 mt-2">
+      <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-md flex items-center justify-center p-6 text-center">
+        <div className="max-w-sm bg-white border border-[#E5E3DC] rounded-2xl p-6 shadow-2xl">
+          <Copy className="w-12 h-12 text-[#991B1B] mx-auto mb-3 animate-pulse" />
+          <h2 className="text-lg font-bold text-[#1E293B]">Parallel Tabs Restricted</h2>
+          <p className="text-xs text-[#64748B] mt-2">
             FocusLock is actively locked to your primary lecture tab. Parallel tabs and multi-tab browsing are strictly restricted.
           </p>
-          <p className="text-[11px] text-slate-400 mt-3 font-mono">
+          <p className="text-[11px] text-[#94A3B8] mt-3 font-mono">
             Close this tab and return to your active lecture session.
           </p>
         </div>
@@ -302,16 +302,16 @@ export default function FocusAttestation({
   return (
     <>
       {/* Automatic Do Not Disturb & Hack-Proof Shield Status Pill */}
-      <div className="w-full mb-3 px-3.5 py-2.5 rounded-xl bg-cyan-950/80 border border-cyan-700/70 flex items-center justify-between text-xs shadow-lg text-cyan-200">
+      <div className="w-full mb-3 px-3.5 py-2.5 rounded-xl bg-[#EEF8EE] border border-[#C8E6C9] flex items-center justify-between text-xs shadow-sm text-[#1B4D2E]">
         <div className="flex items-center gap-2">
-          <BellOff className="w-4 h-4 text-cyan-400 shrink-0 animate-pulse" />
+          <BellOff className="w-4 h-4 text-[#2E6B38] shrink-0 animate-pulse" />
           <span className="font-semibold text-[11px] leading-tight">
             🛡️ DND Active · Calls &amp; Notifications Suppressed · App-Switch Blocked
           </span>
         </div>
         <a
           href="intent:#Intent;action=android.settings.NOTIFICATION_POLICY_ACCESS_SETTINGS;end"
-          className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-cyan-900 text-cyan-300 hover:text-white border border-cyan-600 shrink-0 ml-2 transition-colors"
+          className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-[#2E6B38] text-white hover:bg-[#25572D] shrink-0 ml-2 transition-colors shadow-sm"
           title="Open Android Do Not Disturb permission settings"
         >
           OS DND
@@ -322,34 +322,34 @@ export default function FocusAttestation({
       {kiosk && !isFullscreen && (
         <button
           onClick={enterFullscreen}
-          className="w-full mb-3 p-3 bg-gradient-to-r from-amber-600 to-rose-600 text-white rounded-xl text-xs font-bold flex items-center justify-between shadow-lg shadow-rose-950/50 animate-pulse border border-amber-400"
+          className="w-full mb-3 p-3 bg-[#FFFBEB] border border-[#FCD34D] text-[#92400E] rounded-xl text-xs font-bold flex items-center justify-between shadow-sm animate-pulse"
         >
           <div className="flex items-center gap-2">
-            <Maximize className="w-4 h-4 shrink-0" />
-            <span>🔒 TAB LOCK INACTIVE: Tap to Lock Fullscreen & Hide Tabs</span>
+            <Maximize className="w-4 h-4 shrink-0 text-[#92400E]" />
+            <span>🔒 TAB LOCK INACTIVE: Tap to Lock Fullscreen &amp; Hide Tabs</span>
           </div>
-          <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded uppercase tracking-wider">Lock Now</span>
+          <span className="text-[10px] bg-[#92400E] text-white px-2 py-0.5 rounded uppercase tracking-wider font-bold">Lock Now</span>
         </button>
       )}
 
       <div
-        className={`px-4 py-2.5 rounded-xl border flex items-center justify-between transition-colors shadow-lg ${
+        className={`px-4 py-2.5 rounded-xl border flex items-center justify-between transition-colors shadow-sm ${
           isFocused
-            ? "bg-slate-900/90 border-emerald-500/30 text-emerald-300"
-            : "bg-rose-950/90 border-rose-500 text-rose-200 animate-pulse"
+            ? "bg-white border-[#C8E6C9] text-[#1B4D2E]"
+            : "bg-[#FFF5F5] border-rose-300 text-rose-800 animate-pulse"
         }`}
       >
         <div className="flex items-center gap-2.5">
           {isFocused ? (
-            <ShieldCheck className="w-5 h-5 text-emerald-400" />
+            <ShieldCheck className="w-5 h-5 text-[#2E6B38]" />
           ) : (
-            <AlertTriangle className="w-5 h-5 text-rose-400" />
+            <AlertTriangle className="w-5 h-5 text-rose-600" />
           )}
           <div>
             <span className="text-xs font-bold uppercase tracking-wider block">
               {isFocused ? (isFullscreen ? "🔒 Kiosk Mode Locked" : "Lecture Presence Active") : "⚠️ Tab / Focus Violation Detected"}
             </span>
-            <span className="text-[11px] text-slate-400 font-mono">
+            <span className="text-[11px] text-[#64748B] font-mono">
               Left {leaveCount}× · Screen {wakeLockActive ? "kept awake" : "may sleep"}
             </span>
           </div>
@@ -357,33 +357,33 @@ export default function FocusAttestation({
         {kiosk && !isFullscreen && (
           <button
             onClick={enterFullscreen}
-            className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md bg-slate-800 border border-slate-700 text-slate-300 flex items-center gap-1"
+            className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md bg-[#FAF9F5] border border-[#E5E3DC] text-[#1E293B] flex items-center gap-1 shadow-sm"
           >
-            <Maximize className="w-3 h-3" /> Fullscreen
+            <Maximize className="w-3 h-3 text-[#2E6B38]" /> Fullscreen
           </button>
         )}
       </div>
 
       {showReturnOverlay && (
-        <div className="fixed inset-0 z-[90] bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-6 animate-fade-in">
-          <div className="max-w-sm w-full text-center bg-slate-900 border-2 border-rose-600 rounded-2xl p-6 shadow-2xl">
-            <div className="w-14 h-14 bg-rose-500/10 border border-rose-500/30 rounded-full flex items-center justify-center mx-auto mb-3 text-rose-400 animate-bounce">
+        <div className="fixed inset-0 z-[90] bg-black/50 backdrop-blur-sm flex items-center justify-center p-6 animate-fade-in">
+          <div className="max-w-sm w-full text-center bg-white border-2 border-rose-400 rounded-2xl p-6 shadow-2xl">
+            <div className="w-14 h-14 bg-rose-50 border border-rose-200 rounded-full flex items-center justify-center mx-auto mb-3 text-rose-600 animate-bounce">
               <AlertTriangle className="w-8 h-8" />
             </div>
-            <h2 className="text-lg font-extrabold text-white">Focus Violation Detected</h2>
-            <p className="text-xs text-rose-200/90 mt-2">
+            <h2 className="text-lg font-extrabold text-[#1E293B]">Focus Violation Detected</h2>
+            <p className="text-xs text-[#64748B] mt-2">
               You switched away from FocusLock or switched tabs. Tab switching is restricted during lecture containment.
             </p>
-            <div className="my-3 p-2 bg-slate-950 border border-rose-900/60 rounded-lg text-xs font-mono text-rose-300">
+            <div className="my-3 p-2 bg-[#FFF5F5] border border-rose-200 rounded-lg text-xs font-mono text-rose-800">
               Violations recorded: {leaveCount}× this session
             </div>
-            <p className="text-[11px] text-slate-400 italic">
+            <p className="text-[11px] text-[#64748B] italic">
               Attendance verification requires maintaining foreground presence in lecture materials.
             </p>
             <button
               id="resume-lecture-btn"
               onClick={handleResume}
-              className="mt-5 w-full py-3.5 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 text-xs font-bold uppercase tracking-wider shadow-lg shadow-emerald-500/20 active:scale-[0.98] transition-transform"
+              className="mt-5 w-full py-3.5 rounded-xl bg-[#2E6B38] hover:bg-[#25572D] text-white text-xs font-bold uppercase tracking-wider shadow-sm active:scale-[0.98] transition-transform"
             >
               Re-Engage Lecture Lock (Fullscreen)
             </button>

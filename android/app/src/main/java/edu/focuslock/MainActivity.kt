@@ -10,6 +10,7 @@ import android.net.VpnService
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.View
 import android.view.WindowManager
 import android.webkit.WebResourceRequest
@@ -106,6 +107,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (mode == Mode.LOCKED && !leaving) {
+            enableDndMode()
             report("resume")
             if (FocusVpnService.revokedWhileDetached) {
                 FocusVpnService.revokedWhileDetached = false
@@ -414,9 +416,19 @@ class MainActivity : Activity() {
 
     private fun enableDndMode() {
         try {
-            val nm = getSystemService(NotificationManager::class.java)
-            if (nm != null && nm.isNotificationPolicyAccessGranted) {
+            val nm = getSystemService(NotificationManager::class.java) ?: return
+            if (nm.isNotificationPolicyAccessGranted) {
                 nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
+            } else {
+                Toast.makeText(
+                    this,
+                    "FocusLock requires Do Not Disturb permission to suppress notifications during class.",
+                    Toast.LENGTH_LONG
+                ).show()
+                val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
             }
         } catch (_: Exception) {}
     }

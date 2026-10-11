@@ -174,14 +174,14 @@ export default function StudentPage() {
   };
 
   return (
-    <main className="min-h-screen p-3 sm:p-5 flex flex-col justify-between max-w-lg mx-auto w-full">
-      <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800 text-xs">
-        <span className="font-semibold text-emerald-400 flex items-center gap-1.5">
+    <main className="min-h-screen p-3 sm:p-5 flex flex-col justify-between max-w-lg mx-auto w-full bg-[#FAF9F5] text-[#1E293B]">
+      <div className="flex items-center justify-between pb-2 mb-2 border-b border-[#E5E3DC] text-xs">
+        <span className="font-semibold text-[#1B4D2E] flex items-center gap-1.5">
           📱 FocusLock Student Mobile
         </span>
         <a
           href="/"
-          className="text-cyan-400 hover:text-cyan-300 font-semibold underline text-[11px]"
+          className="text-[#2E6B38] hover:text-[#25572D] font-semibold underline text-[11px]"
         >
           ← Teacher Dashboard
         </a>
@@ -190,8 +190,8 @@ export default function StudentPage() {
       {!session ? (
         <div className="my-auto py-6">
           {sessionEnded && (
-            <div className="mb-4 p-4 bg-cyan-950/90 border border-cyan-700 rounded-xl text-xs text-cyan-200 flex items-center gap-2 shadow-xl">
-              <CheckCircle2 className="w-5 h-5 text-cyan-400 shrink-0" />
+            <div className="mb-4 p-4 bg-[#EEF8EE] border border-[#C8E6C9] rounded-xl text-xs text-[#1B4D2E] flex items-center gap-2 shadow-sm">
+              <CheckCircle2 className="w-5 h-5 text-[#2E6B38] shrink-0" />
               <span className="font-semibold">Session ended by instructor. Returning to check-in…</span>
             </div>
           )}
@@ -200,14 +200,14 @@ export default function StudentPage() {
       ) : (
         <div className="flex flex-col gap-4 py-2">
           {/* Top Session Status Bar */}
-          <div className="flex items-center justify-between bg-slate-900 border border-slate-800 px-4 py-2.5 rounded-xl shadow-md">
+          <div className="flex items-center justify-between bg-white border border-[#E5E3DC] px-4 py-2.5 rounded-xl shadow-sm">
             <div className="flex items-center gap-2">
-              <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+              <div className="w-2.5 h-2.5 rounded-full bg-[#3B8246] animate-pulse" />
               <div>
-                <span className="text-xs font-bold text-white block leading-tight">
+                <span className="text-xs font-bold text-[#1E293B] block leading-tight">
                   {session.student_name}
                 </span>
-                <span className="text-[10px] font-mono text-slate-400">
+                <span className="text-[10px] font-mono text-[#64748B]">
                   {session.student_id} · CS-402
                 </span>
               </div>
@@ -216,15 +216,15 @@ export default function StudentPage() {
             <div className="flex items-center gap-2">
               <button
                 onClick={handleEmergency}
-                className="px-2.5 py-1 bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-300 rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 transition-colors"
+                className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 rounded-lg text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 transition-colors"
                 title={`Immediate baseband emergency call (${emergencyNumber})`}
               >
-                <PhoneCall className="w-3 h-3 text-rose-400" /> {emergencyNumber}
+                <PhoneCall className="w-3 h-3 text-rose-600" /> {emergencyNumber}
               </button>
 
               <button
                 onClick={handleExit}
-                className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-colors"
+                className="p-1.5 bg-[#F1F0EA] hover:bg-[#E5E3DC] rounded-lg text-[#64748B] hover:text-[#1E293B] transition-colors"
                 title="Exit Session"
               >
                 <LogOut className="w-4 h-4" />
@@ -234,9 +234,9 @@ export default function StudentPage() {
 
           {/* Session Ended Notification */}
           {sessionEnded && (
-            <div className="p-4 bg-cyan-950/90 border border-cyan-700 rounded-xl text-xs text-cyan-200 flex flex-col gap-2.5 shadow-xl">
+            <div className="p-4 bg-[#EEF8EE] border border-[#C8E6C9] rounded-xl text-xs text-[#1B4D2E] flex flex-col gap-2.5 shadow-sm">
               <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-5 h-5 text-cyan-400 shrink-0" />
+                <CheckCircle2 className="w-5 h-5 text-[#2E6B38] shrink-0" />
                 <span className="font-semibold">Instructor stopped the session. Releasing locks and returning to Idle screen…</span>
               </div>
               <button
@@ -246,7 +246,7 @@ export default function StudentPage() {
                   setSessionEnded(false);
                   sessionEndedRef.current = false;
                 }}
-                className="w-full py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-lg text-xs transition-colors"
+                className="w-full py-2 bg-[#2E6B38] hover:bg-[#25572D] text-white font-bold rounded-lg text-xs transition-colors shadow-sm"
               >
                 Return to Check-In Screen Now
               </button>
@@ -274,31 +274,31 @@ export default function StudentPage() {
       )}
 
       {/* Footer Branding */}
-      <footer className="text-center py-3 text-[11px] text-slate-500">
+      <footer className="text-center py-3 text-[11px] text-[#64748B]">
         FocusLock Zero-Trust Academic Intranet · Session-Scoped Kiosk
       </footer>
 
       {/* Custom Exit Confirmation Overlay — replaces window.confirm() which is blocked in fullscreen */}
       {showExitConfirm && (
-        <div className="fixed inset-0 z-[200] bg-black/90 backdrop-blur-sm flex items-center justify-center p-6">
-          <div className="bg-slate-900 border-2 border-amber-600 rounded-2xl p-6 max-w-sm w-full shadow-2xl text-center">
-            <div className="w-14 h-14 bg-amber-500/10 border border-amber-500/30 rounded-full flex items-center justify-center mx-auto mb-3 text-amber-400">
+        <div className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex items-center justify-center p-6">
+          <div className="bg-white border-2 border-amber-400 rounded-2xl p-6 max-w-sm w-full shadow-2xl text-center">
+            <div className="w-14 h-14 bg-amber-50 border border-amber-200 rounded-full flex items-center justify-center mx-auto mb-3 text-amber-600">
               <AlertTriangle className="w-8 h-8" />
             </div>
-            <h2 className="text-lg font-extrabold text-white">Exit Lecture Mode?</h2>
-            <p className="text-xs text-amber-200/90 mt-2 leading-relaxed">
+            <h2 className="text-lg font-extrabold text-[#1E293B]">Exit Lecture Mode?</h2>
+            <p className="text-xs text-[#64748B] mt-2 leading-relaxed">
               Your early exit will be recorded on the faculty attendance board. Your attendance may be marked as <strong>Left in Middle</strong>.
             </p>
             <div className="flex flex-col gap-2 mt-5">
               <button
                 onClick={handleConfirmExit}
-                className="w-full py-3 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-sm transition-colors"
+                className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl text-sm transition-colors shadow-sm"
               >
                 Exit &amp; Record My Departure
               </button>
               <button
                 onClick={() => setShowExitConfirm(false)}
-                className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl text-sm border border-slate-700 flex items-center justify-center gap-2 transition-colors"
+                className="w-full py-2.5 bg-[#F1F0EA] hover:bg-[#E5E3DC] text-[#1E293B] font-semibold rounded-xl text-sm border border-[#E5E3DC] flex items-center justify-center gap-2 transition-colors"
               >
                 <X className="w-4 h-4" /> Stay in Lecture
               </button>

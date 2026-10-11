@@ -86,7 +86,7 @@ export default function LiveMatrix({
       key={f}
       onClick={() => setFilter(f)}
       className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-        filter === f ? cls : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+        filter === f ? cls : "bg-[#FAF9F5] border-[#E5E3DC] text-[#64748B] hover:text-[#1E293B]"
       }`}
     >
       {label} <span className="font-mono ml-1">{n}</span>
@@ -94,32 +94,32 @@ export default function LiveMatrix({
   );
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl flex flex-col h-full">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4 pb-4 border-b border-slate-800">
+    <div className="bg-white border border-[#E5E3DC] rounded-2xl p-6 shadow-sm flex flex-col h-full">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4 pb-4 border-b border-[#F1F0EA]">
         <div>
-          <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-            <Monitor className="w-5 h-5 text-cyan-400" />
+          <h2 className="text-lg font-bold text-[#1E293B] flex items-center gap-2">
+            <Monitor className="w-5 h-5 text-[#2E6B38]" />
             Classroom Attendance Log
           </h2>
-          <p className="text-xs text-slate-400 mt-0.5">
+          <p className="text-xs text-[#64748B] mt-0.5">
             Real-time verification log synced with enrolled mock roster.
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={handleExportCSV}
-            className="px-3 py-1 bg-cyan-950 hover:bg-cyan-900 border border-cyan-700 text-cyan-300 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+            className="px-3 py-1.5 bg-[#EEF8EE] hover:bg-[#E3F2E3] border border-[#C8E6C9] text-[#1B4D2E] rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 shadow-sm"
           >
             Download CSV
           </button>
-          <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-950/80 border border-emerald-800 rounded-full text-xs font-mono text-emerald-400 font-semibold">
+          <div className="flex items-center gap-1.5 px-3 py-1 bg-[#EEF8EE] border border-[#C8E6C9] rounded-full text-xs font-mono text-[#1B4D2E] font-semibold">
             <ShieldCheck className="w-3.5 h-3.5" />
             {counts.present}/{counts.total} present
           </div>
           {onCloseRoster && (
             <button
               onClick={onCloseRoster}
-              className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold transition-colors"
+              className="px-3 py-1.5 bg-[#F1F0EA] hover:bg-[#E5E3DC] text-[#1E293B] rounded-lg text-xs font-semibold transition-colors"
             >
               Back to Projector
             </button>
@@ -129,24 +129,24 @@ export default function LiveMatrix({
 
       <div className="flex flex-col sm:flex-row gap-3 mb-4">
         <div className="flex flex-wrap gap-2">
-          {chip("ALL", "All", counts.total, "bg-slate-800 border-slate-600 text-white")}
-          {chip("PRESENT", "Present", counts.present, "bg-emerald-950 border-emerald-700 text-emerald-300")}
-          {chip("LEFT_MIDDLE", "Left in Middle", counts.leftMiddle, "bg-amber-950 border-amber-600 text-amber-300")}
-          {chip("ABSENT", "Absent", counts.absent, "bg-rose-950 border-rose-700 text-rose-300")}
+          {chip("ALL", "All", counts.total, "bg-[#E5E3DC] border-[#D5D2C8] text-[#1E293B]")}
+          {chip("PRESENT", "Present", counts.present, "bg-[#EEF8EE] border-[#C8E6C9] text-[#1B4D2E]")}
+          {chip("LEFT_MIDDLE", "Left in Middle", counts.leftMiddle, "bg-[#FEF3C7] border-[#FCD34D] text-[#92400E]")}
+          {chip("ABSENT", "Absent", counts.absent, "bg-[#FEE2E2] border-[#FCA5A5] text-[#991B1B]")}
         </div>
         <div className="relative sm:ml-auto">
-          <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2.5" />
+          <Search className="w-3.5 h-3.5 text-[#94A3B8] absolute left-3 top-2.5" />
           <input
             id="roster-search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search name or ID"
-            className="pl-8 pr-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white focus:outline-none focus:border-cyan-500 w-full sm:w-56"
+            className="pl-8 pr-3 py-2 bg-[#FAF9F5] border border-[#E5E3DC] rounded-lg text-xs text-[#1E293B] focus:outline-none focus:border-[#2E6B38] w-full sm:w-56"
           />
         </div>
       </div>
 
-      <p className="mb-3 text-[11px] text-slate-500">
+      <p className="mb-3 text-[11px] text-[#64748B]">
         Categorized attendance data: shows who is currently present, who left the lecture in the middle (tab switched), and who never checked in from the mock roster.
       </p>
 
@@ -162,53 +162,53 @@ export default function LiveMatrix({
           return (
             <div
               key={student.student_id}
-              className={`rounded-xl p-4 border transition-all duration-300 ${
+              className={`rounded-xl p-4 border transition-all duration-300 shadow-sm ${
                 isLeftMiddle
-                  ? "bg-amber-950/30 border-amber-500/70 shadow-amber-950/40"
+                  ? "bg-[#FFFBEB] border-[#FCD34D]"
                   : isFlagged
-                  ? "bg-amber-950/20 border-amber-600/60"
+                  ? "bg-[#FFFBEB] border-[#FCD34D]"
                   : isAbsent
-                  ? "bg-slate-950/50 border-slate-800 opacity-80"
-                  : "bg-emerald-950/10 border-emerald-800/50"
+                  ? "bg-[#FAF9F5] border-[#E5E3DC] opacity-75"
+                  : "bg-[#F6FAF6] border-[#C8E6C9]"
               }`}
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <h3 className="font-semibold text-slate-100 text-sm leading-tight truncate">{student.student_name}</h3>
-                  <span className="text-xs font-mono text-slate-400 block mt-0.5">
-                    {student.student_id} · <span className="text-slate-300">{student.seat}</span>
+                  <h3 className="font-semibold text-[#1E293B] text-sm leading-tight truncate">{student.student_name}</h3>
+                  <span className="text-xs font-mono text-[#64748B] block mt-0.5">
+                    {student.student_id} · <span className="text-[#475569]">{student.seat}</span>
                   </span>
                 </div>
                 {isLeftMiddle ? (
-                  <span className="shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold text-amber-300 bg-amber-950/90 border border-amber-600 px-2 py-0.5 rounded-md animate-pulse">
+                  <span className="shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold text-[#92400E] bg-[#FEF3C7] border border-[#FCD34D] px-2 py-0.5 rounded-md animate-pulse">
                     <ShieldAlert className="w-3 h-3" /> Left Middle ({student.leave_count || 1}×)
                   </span>
                 ) : isFlagged ? (
-                  <span className="shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold text-amber-300 bg-amber-950/90 border border-amber-700/80 px-2 py-0.5 rounded-md">
+                  <span className="shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold text-[#92400E] bg-[#FEF3C7] border border-[#FCD34D] px-2 py-0.5 rounded-md">
                     <ShieldAlert className="w-3 h-3" /> Verify
                   </span>
                 ) : isAbsent ? (
-                  <span className="shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold text-rose-300 bg-rose-950/80 border border-rose-800 px-2 py-0.5 rounded-md">
+                  <span className="shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold text-[#991B1B] bg-[#FEE2E2] border border-[#FCA5A5] px-2 py-0.5 rounded-md">
                     <UserX className="w-3 h-3" /> Absent
                   </span>
                 ) : (
-                  <span className="shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 bg-emerald-950/80 border border-emerald-800 px-2 py-0.5 rounded-md">
-                    {student.marked_by === "instructor" ? <Hand className="w-3 h-3" /> : <UserCheck className="w-3 h-3" />}
+                  <span className="shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold text-[#1B4D2E] bg-[#EEF8EE] border border-[#C8E6C9] px-2 py-0.5 rounded-md">
+                    {student.marked_by === "instructor" ? <Hand className="w-3 h-3" /> : <UserCheck className="w-3 h-3 text-[#2E6B38]" />}
                     Present
                   </span>
                 )}
               </div>
 
-              <div className="mt-3 pt-2.5 border-t border-slate-800/80 text-[11px] text-slate-400 flex flex-col gap-1.5">
+              <div className="mt-3 pt-2.5 border-t border-[#E5E3DC] text-[11px] text-[#64748B] flex flex-col gap-1.5">
                 <div className="flex items-center justify-between">
                   <span>{student.marked_by === "instructor" ? "Marked by you" : "Checked in:"}</span>
-                  <span className="font-mono text-slate-300">
+                  <span className="font-mono text-[#1E293B]">
                     {student.joined_at ? new Date(student.joined_at * 1000).toLocaleTimeString() : "—"}
                   </span>
                 </div>
 
                 {isFlagged && student.anomaly_flag && (
-                  <div className="text-[10px] text-amber-300 bg-amber-950/70 px-2 py-1 rounded border border-amber-800/70 font-mono">
+                  <div className="text-[10px] text-[#92400E] bg-[#FEF3C7] px-2 py-1 rounded border border-[#FCD34D] font-mono">
                     {student.anomaly_flag}
                   </div>
                 )}
@@ -218,7 +218,7 @@ export default function LiveMatrix({
                     <button
                       disabled={busy}
                       onClick={() => onOverrideStudent(student.student_id)}
-                      className="flex-1 py-1.5 px-2 bg-emerald-600 hover:bg-emerald-500 text-slate-950 text-xs font-bold rounded-lg flex items-center justify-center gap-1 disabled:opacity-50"
+                      className="flex-1 py-1.5 px-2 bg-[#2E6B38] hover:bg-[#25572D] text-white text-xs font-bold rounded-lg flex items-center justify-center gap-1 shadow-sm disabled:opacity-50"
                     >
                       <UserCheck className="w-3.5 h-3.5" /> Verify
                     </button>
@@ -228,7 +228,7 @@ export default function LiveMatrix({
                       id={`mark-present-${student.student_id}`}
                       disabled={busy}
                       onClick={() => onMarkAttendance(student.student_id, "PRESENT")}
-                      className="flex-1 py-1.5 px-2 bg-emerald-600 hover:bg-emerald-500 text-slate-950 text-xs font-bold rounded-lg flex items-center justify-center gap-1 disabled:opacity-50"
+                      className="flex-1 py-1.5 px-2 bg-[#2E6B38] hover:bg-[#25572D] text-white text-xs font-bold rounded-lg flex items-center justify-center gap-1 shadow-sm disabled:opacity-50"
                     >
                       <UserCheck className="w-3.5 h-3.5" /> Mark Present
                     </button>
@@ -238,7 +238,7 @@ export default function LiveMatrix({
                       id={`mark-absent-${student.student_id}`}
                       disabled={busy}
                       onClick={() => onMarkAttendance(student.student_id, "ABSENT")}
-                      className="flex-1 py-1.5 px-2 bg-slate-800 hover:bg-rose-900 border border-slate-700 hover:border-rose-700 text-slate-300 text-xs font-semibold rounded-lg flex items-center justify-center gap-1 disabled:opacity-50"
+                      className="flex-1 py-1.5 px-2 bg-[#F1F0EA] hover:bg-[#FEE2E2] hover:text-[#991B1B] border border-[#E5E3DC] hover:border-[#FCA5A5] text-[#64748B] text-xs font-semibold rounded-lg flex items-center justify-center gap-1 transition-colors disabled:opacity-50"
                     >
                       <UserX className="w-3.5 h-3.5" /> Mark Absent
                     </button>
@@ -249,7 +249,7 @@ export default function LiveMatrix({
           );
         })}
         {visible.length === 0 && (
-          <div className="col-span-full text-center text-xs text-slate-500 py-10 border-2 border-dashed border-slate-800 rounded-xl">
+          <div className="col-span-full text-center text-xs text-[#64748B] py-10 border-2 border-dashed border-[#E5E3DC] rounded-xl bg-[#FAF9F5]">
             No students match this filter.
           </div>
         )}
