@@ -57,7 +57,7 @@ tasks.named("preBuild") { dependsOn(verifyFaceModel) }
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.0")
     implementation("com.google.mlkit:face-detection:16.1.7")
     implementation(platform("androidx.compose:compose-bom:2025.04.01"))
     implementation("androidx.activity:activity-compose:1.10.1")
